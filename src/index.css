@@ -1,0 +1,51 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,200..800;1,200..800&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+
+  /* Brand — aligned to Wali Baba Foods customer app */
+  --color-brand: #b51c00;
+  --color-brand-dark: #8e1400;
+  --color-brand-light: #ffdad3;
+
+  /* Text */
+  --color-ink: #191c1d;
+  --color-ink-soft: #586062;
+  --color-ink-muted: #906f69;
+
+  /* Borders / surfaces */
+  --color-line: #e2dfde;
+  --color-line-soft: #edeeef;
+  --color-line-2: #e1e3e4;
+  --color-surface: #ffffff;
+  --color-surface-low: #f3f4f5;
+  --color-canvas: #f8f9fa;
+
+  /* Status */
+  --color-pos: #16a34a;
+  --color-pos-dark: #15803d;
+  --color-pos-soft: #dcfce7;
+  --color-info: #1d4ed8;
+  --color-info-soft: #dbeafe;
+  --color-gold: #715828;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color: var(--color-ink);
+  background: var(--color-canvas);
+}
