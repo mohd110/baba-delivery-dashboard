@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   Plus,
   SlidersHorizontal,
@@ -43,19 +43,24 @@ function categoryFor(name = '') {
   return 'MAIN COURSE'
 }
 
-function Toggle({ on }) {
+function Toggle({ on, onChange, disabled }) {
   return (
-    <span
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      disabled={disabled}
+      onClick={onChange}
       className={`flex h-6 w-11 items-center rounded-full p-0.5 transition-colors ${
         on ? 'bg-brand' : 'bg-line-2'
-      }`}
+      } ${disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
     >
       <span
         className={`h-5 w-5 rounded-full bg-white shadow transition-transform ${
           on ? 'translate-x-5' : 'translate-x-0'
         }`}
       />
-    </span>
+    </button>
   )
 }
 
@@ -63,23 +68,68 @@ export default function Menu() {
   const [active, setActive] = useState('Biryani')
   const [products, setProducts] = useState([])
   const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState(() => new Set())
+
+  const load = useCallback(
+    () =>
+      supabase
+        .from('products')
+        .select('*')
+        .order('price', { ascending: false })
+        .then(({ data, error }) => {
+          if (error) console.error('Failed to load products:', error.message)
+          setProducts(data ?? [])
+          setLoading(false)
+        }),
+    []
+  )
 
   useEffect(() => {
-    let alive = true
-    supabase
-      .from('products')
-      .select('*')
-      .order('price', { ascending: false })
-      .then(({ data, error }) => {
-        if (!alive) return
-        if (error) console.error('Failed to load products:', error.message)
-        setProducts(data ?? [])
-        setLoading(false)
-      })
+    load()
+    // Keep availability in sync if it's flipped elsewhere (another admin, the app).
+    const channel = supabase
+      .channel('menu-products')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, () => load())
+      .subscribe()
     return () => {
-      alive = false
+      supabase.removeChannel(channel)
     }
-  }, [])
+  }, [load])
+
+  // Flip one dish's availability with an optimistic update; roll back on failure.
+  const setAvailability = async (id, next) => {
+    if (busy.has(id)) return
+    setBusy((prev) => new Set(prev).add(id))
+    setProducts((prev) => prev.map((p) => (p.id === id ? { ...p, is_available: next } : p)))
+    const { error } = await supabase.from('products').update({ is_available: next }).eq('id', id)
+    if (error) {
+      console.error('Failed to update availability:', error.message)
+      setProducts((prev) => prev.map((p) => (p.id === id ? { ...p, is_available: !next } : p)))
+      alert(`Could not update availability: ${error.message}`)
+    }
+    setBusy((prev) => {
+      const n = new Set(prev)
+      n.delete(id)
+      return n
+    })
+  }
+
+  // Bulk action: mark every sold-out dish as available again.
+  const [bulkBusy, setBulkBusy] = useState(false)
+  const updateAllAvailable = async () => {
+    const offIds = products.filter((p) => !p.is_available).map((p) => p.id)
+    if (bulkBusy || offIds.length === 0) return
+    setBulkBusy(true)
+    const prev = products
+    setProducts((p) => p.map((x) => ({ ...x, is_available: true })))
+    const { error } = await supabase.from('products').update({ is_available: true }).in('id', offIds)
+    if (error) {
+      console.error('Failed bulk availability update:', error.message)
+      setProducts(prev)
+      alert(`Could not update availability: ${error.message}`)
+    }
+    setBulkBusy(false)
+  }
 
   const inStock = products.filter((p) => p.is_available).length
   const soldOut = products.filter((p) => !p.is_available).length
@@ -216,7 +266,11 @@ export default function Menu() {
                       </span>
                     </td>
                     <td className="px-5 py-4">
-                      <Toggle on={p.is_available} />
+                      <Toggle
+                        on={p.is_available}
+                        disabled={busy.has(p.id)}
+                        onChange={() => setAvailability(p.id, !p.is_available)}
+                      />
                     </td>
                     <td className="px-5 py-4 text-right text-ink-soft">⋯</td>
                   </tr>
@@ -281,8 +335,12 @@ export default function Menu() {
                 </div>
               ))}
             </div>
-            <button className="mt-5 w-full rounded-lg border border-line py-2.5 text-sm font-semibold text-ink hover:bg-line-soft">
-              Update All Availability
+            <button
+              onClick={updateAllAvailable}
+              disabled={bulkBusy || soldOut === 0}
+              className="mt-5 w-full rounded-lg border border-line py-2.5 text-sm font-semibold text-ink hover:bg-line-soft disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {bulkBusy ? 'Updating…' : soldOut === 0 ? 'All Dishes Available' : `Mark ${pad(soldOut)} Sold Out Available`}
             </button>
           </div>
         </div>

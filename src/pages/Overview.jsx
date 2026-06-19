@@ -29,6 +29,9 @@ const RECENT_STATUS = {
   accepted: 'ACCEPTED',
   preparing: 'PREPARING',
   ready: 'READY',
+  out_for_delivery: 'ON THE WAY',
+  delivered: 'DELIVERED',
+  cancelled: 'CANCELLED',
 }
 
 /* ---------- KPI cards ---------- */
@@ -76,6 +79,9 @@ const statusStyles = {
   READY: 'bg-pos-soft text-pos-dark',
   ACCEPTED: 'bg-info-soft text-info',
   PENDING: 'bg-[#f3f4f6] text-[#374151]',
+  'ON THE WAY': 'bg-info-soft text-info',
+  DELIVERED: 'bg-pos-soft text-pos-dark',
+  CANCELLED: 'bg-[#fee2e2] text-[#b91c1c]',
 }
 
 function OrderRow({ img, name, id, price, status }) {
@@ -200,13 +206,15 @@ export default function Overview() {
     }
   }, [])
 
-  const totalSalesNum = orders.reduce((s, o) => s + (o.total || 0), 0)
+  // Cancelled orders never earned money, so keep them out of revenue figures.
+  const earning = orders.filter((o) => o.status !== 'cancelled')
+  const totalSalesNum = earning.reduce((s, o) => s + (o.total || 0), 0)
   const totalSales = `₹${totalSalesNum.toLocaleString('en-IN')}`
   const totalOrders = orders.length.toLocaleString('en-IN')
 
   // most-ordered dish across all order_items
   const counts = {}
-  orders.forEach((o) =>
+  earning.forEach((o) =>
     (o.order_items ?? []).forEach((it) => {
       const name = it.products?.name
       if (name) counts[name] = (counts[name] || 0) + (it.quantity || 1)
@@ -215,7 +223,7 @@ export default function Overview() {
   const topItem = Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? '—'
 
   const kpis = buildKpis(totalSales, totalOrders, topItem)
-  const dailySales = buildDailySales(orders)
+  const dailySales = buildDailySales(earning)
 
   const pending = orders.filter((o) => o.status === 'pending').length
   const preparing = orders.filter((o) => ['accepted', 'preparing'].includes(o.status)).length
