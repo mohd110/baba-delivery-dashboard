@@ -5,34 +5,74 @@ import { supabase } from '../lib/supabase.js'
 
 let toastSeq = 0
 
-/* Louder, longer 3-note chime when a new order lands so it's hard to miss in a
-   busy kitchen (best-effort; ignored if audio is blocked). */
-function ding() {
+/* ── Loud, irritating new-order alarm (rings for 1 minute) ─────────────
+ * Two-tone siren: alternates between a 660 Hz and an 880 Hz harsh square
+ * wave (ambulance / fire-truck style), swapping every 0.4s at near-max
+ * volume so staff can't miss an incoming order.
+ * Best-effort: silently skipped if the browser blocks audio. Call
+ * stopAlarm() to silence it early. */
+const ALARM_DURATION_MS = 60_000
+let alarmCtx = null
+let alarmInterval = null
+let alarmTimeout = null
+
+function stopAlarm() {
+  if (alarmInterval) {
+    clearInterval(alarmInterval)
+    alarmInterval = null
+  }
+  if (alarmTimeout) {
+    clearTimeout(alarmTimeout)
+    alarmTimeout = null
+  }
+  if (alarmCtx) {
+    try {
+      alarmCtx.close()
+    } catch {
+      /* already closed */
+    }
+    alarmCtx = null
+  }
+}
+
+function startAlarm() {
   try {
     const Ctx = window.AudioContext || window.webkitAudioContext
     if (!Ctx) return
+    stopAlarm() // restart cleanly if another order arrives mid-alarm
     const ctx = new Ctx()
-    const now = ctx.currentTime
-    const notes = [
-      { freq: 783.99, start: 0.0, dur: 0.55 }, // G5
-      { freq: 1046.5, start: 0.16, dur: 0.55 }, // C6
-      { freq: 1318.51, start: 0.32, dur: 0.95 }, // E6 (sustains so it rings out)
-    ]
-    notes.forEach(({ freq, start, dur }) => {
+    alarmCtx = ctx
+    ctx.resume?.()
+
+    const tone = (freq, t0, dur) => {
       const osc = ctx.createOscillator()
       const gain = ctx.createGain()
       osc.connect(gain)
       gain.connect(ctx.destination)
-      osc.type = 'sine'
+      osc.type = 'square' // harsh, buzzy, piercing
       osc.frequency.value = freq
-      const t = now + start
-      gain.gain.setValueAtTime(0.0001, t)
-      gain.gain.exponentialRampToValueAtTime(0.5, t + 0.03) // louder peak
-      gain.gain.exponentialRampToValueAtTime(0.0001, t + dur)
-      osc.start(t)
-      osc.stop(t + dur + 0.05)
-    })
-    setTimeout(() => ctx.close(), 1500)
+      gain.gain.setValueAtTime(0.0001, t0)
+      gain.gain.exponentialRampToValueAtTime(0.85, t0 + 0.008) // very loud
+      gain.gain.setValueAtTime(0.85, t0 + dur - 0.02)
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur)
+      osc.start(t0)
+      osc.stop(t0 + dur)
+    }
+
+    // One "ring" = a two-tone siren cycle: 660 Hz then 880 Hz, each held for
+    // 0.4s back-to-back with no gap (ambulance / fire-truck wail). The cycle
+    // repeats continuously so it nags until silenced.
+    const STEP = 0.4
+    const ring = () => {
+      if (!alarmCtx) return
+      const now = ctx.currentTime
+      tone(660, now, STEP)
+      tone(880, now + STEP, STEP)
+    }
+
+    ring()
+    alarmInterval = setInterval(ring, STEP * 2 * 1000) // seamless 0.8s loop
+    alarmTimeout = setTimeout(stopAlarm, ALARM_DURATION_MS)
   } catch {
     /* audio not available — silently skip */
   }
@@ -62,20 +102,23 @@ export default function OrderNotifications() {
             name: addr.name || 'New customer',
           }
           setToasts((list) => [toast, ...list].slice(0, 4))
-          ding()
-          setTimeout(() => dismiss(id), 9000)
+          startAlarm()
+          // Keep the toast visible for the full alarm so staff can silence it.
+          setTimeout(() => dismiss(id), ALARM_DURATION_MS)
         }
       )
       .subscribe()
 
     return () => {
       supabase.removeChannel(channel)
+      stopAlarm()
     }
   }, [])
 
   if (toasts.length === 0) return null
 
   const open = (id) => {
+    stopAlarm()
     setToasts((list) => list.filter((t) => t.id !== id))
     navigate('/orders')
   }
@@ -107,10 +150,11 @@ export default function OrderNotifications() {
             tabIndex={-1}
             onClick={(e) => {
               e.stopPropagation()
+              stopAlarm()
               setToasts((list) => list.filter((x) => x.id !== t.id))
             }}
             className="shrink-0 text-ink-soft hover:text-ink"
-            aria-label="Dismiss"
+            aria-label="Dismiss and silence alarm"
           >
             <X className="h-4 w-4" />
           </span>
