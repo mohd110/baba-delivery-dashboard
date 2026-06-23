@@ -4,6 +4,8 @@ import DashboardLayout from './layout/DashboardLayout.jsx'
 import Login from './pages/Login.jsx'
 import Overview from './pages/Overview.jsx'
 import Orders from './pages/Orders.jsx'
+import OrderHistory from './pages/OrderHistory.jsx'
+import Complaints from './pages/Complaints.jsx'
 import Menu from './pages/Menu.jsx'
 import Riders from './pages/Riders.jsx'
 import Customers from './pages/Customers.jsx'
@@ -38,6 +40,8 @@ export default function App() {
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
             <Route path="/dashboard" element={<Overview />} />
             <Route path="/orders" element={<Orders />} />
+            <Route path="/order-history" element={<OrderHistory />} />
+            <Route path="/complaints" element={<Complaints />} />
             <Route path="/menu" element={<Menu />} />
             <Route path="/riders" element={<Riders />} />
             <Route path="/customers" element={<Customers />} />
