@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 import Topbar, { TopIcons } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
+import { orderCode } from '../lib/format.js'
 
 function imgFor(name = '') {
   const n = name.toLowerCase()
@@ -69,7 +70,7 @@ export default function OrderHistory() {
     if (searchQuery) {
       const q = searchQuery.toLowerCase()
       const customerName = o.delivery_address?.name?.toLowerCase() || ''
-      const orderId = `ord-${o.id.slice(0, 4)}`.toLowerCase()
+      const orderId = orderCode(o).toLowerCase()
       const items = o.order_items?.map(it => it.products?.name?.toLowerCase() || '').join(' ') || ''
       if (!customerName.includes(q) && !orderId.includes(q) && !items.includes(q)) return false
     }
@@ -227,7 +228,7 @@ export default function OrderHistory() {
                   </tr>
                 ) : (
                   filteredOrders.map((o) => {
-                    const shortId = `ORD-${o.id.slice(0, 4).toUpperCase()}`
+                    const shortId = orderCode(o)
                     const timestamp = new Date(o.created_at).toLocaleString('en-IN', {
                       day: 'numeric',
                       month: 'short',
@@ -282,7 +283,7 @@ export default function OrderHistory() {
             <div className="p-4 border-b border-line flex justify-between items-center bg-canvas/30">
               <div>
                 <h3 className="text-sm font-bold text-ink">
-                  Details for ORD-{selectedOrder.id.slice(0, 4).toUpperCase()}
+                  Details for {orderCode(selectedOrder)}
                 </h3>
                 <p className="text-[10px] text-ink-soft mt-0.5">
                   Logged on {new Date(selectedOrder.created_at).toLocaleString()}

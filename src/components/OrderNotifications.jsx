@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { BellRing, X } from 'lucide-react'
 import { supabase } from '../lib/supabase.js'
+import { orderCode } from '../lib/format.js'
 
 let toastSeq = 0
 
@@ -98,7 +99,7 @@ export default function OrderNotifications() {
           const toast = {
             id,
             orderId: o.id || null,
-            code: o.id ? `ORD-${String(o.id).slice(0, 4).toUpperCase()}` : 'New order',
+            code: orderCode(o),
             total: typeof o.total === 'number' ? o.total : null,
             name: addr.name || 'New customer',
           }

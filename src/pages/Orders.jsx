@@ -22,6 +22,7 @@ import {
 } from 'lucide-react'
 import Topbar, { TopIcons } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
+import { orderCode } from '../lib/format.js'
 
 function imgFor(name = '', photoUrl) {
   if (photoUrl) return photoUrl
@@ -51,7 +52,7 @@ function escapeHtml(value) {
 
 // Kitchen Order Ticket: food + quantity only, never any prices.
 function buildKotHtml(order) {
-  const shortId = `ORD-${order.id.slice(0, 4).toUpperCase()}`
+  const shortId = orderCode(order)
   const placed = new Date(order.created_at).toLocaleString('en-IN')
   const items = order.order_items ?? []
   const rows = items
@@ -83,7 +84,7 @@ function buildKotHtml(order) {
 
 // Customer bill: full itemised pricing breakdown.
 function buildBillHtml(order) {
-  const shortId = `ORD-${order.id.slice(0, 4).toUpperCase()}`
+  const shortId = orderCode(order)
   const placed = new Date(order.created_at).toLocaleString('en-IN')
   const addr = order.delivery_address || {}
   const items = order.order_items ?? []
@@ -311,7 +312,7 @@ export default function Orders() {
     if (!searchQuery) return true
     const q = searchQuery.toLowerCase()
     const customerName = o.delivery_address?.name?.toLowerCase() || ''
-    const orderId = `ord-${o.id.slice(0, 4)}`.toLowerCase()
+    const orderId = orderCode(o).toLowerCase()
     const items = o.order_items?.map(it => it.products?.name?.toLowerCase() || '').join(' ') || ''
     return customerName.includes(q) || orderId.includes(q) || items.includes(q)
   })
@@ -360,7 +361,7 @@ export default function Orders() {
 
   const cancel = async (order) => {
     if (busy) return
-    const shortId = `ORD-${order.id.slice(0, 4).toUpperCase()}`
+    const shortId = orderCode(order)
     if (!window.confirm(`Cancel order ${shortId}? This cannot be undone.`)) return
     setBusy(order.id)
     const { error } = await supabase.from('orders').update({ status: 'cancelled' }).eq('id', order.id)
@@ -508,7 +509,7 @@ export default function Orders() {
               filteredOrders.map((o) => {
                 const items = o.order_items ?? []
                 const isSelected = o.id === selectedOrderId
-                const shortId = `ORD-${o.id.slice(0, 4).toUpperCase()}`
+                const shortId = orderCode(o)
                 const elapsedMin = elapsed(o.created_at)
 
                 // Highlight cards that are running late in kitchen
@@ -581,7 +582,7 @@ export default function Orders() {
                   <div>
                     <div className="flex items-center gap-3">
                       <h2 className="text-xl font-bold text-ink">
-                        Order ORD-{selectedOrder.id.slice(0, 4).toUpperCase()}
+                        Order {orderCode(selectedOrder)}
                       </h2>
                       <StatusBadge status={selectedOrder.status} />
                     </div>

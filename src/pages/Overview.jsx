@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 import Topbar, { SearchBox, TopIcons, Divider, ProfileChip } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
+import { orderCode } from '../lib/format.js'
 
 function dishImg(name = '') {
   const n = name.toLowerCase()
@@ -243,7 +244,7 @@ export default function Overview() {
     return {
       img: dishImg(name),
       name: label,
-      id: `#ORD-${o.id.slice(0, 4).toUpperCase()}`,
+      id: `#${orderCode(o)}`,
       price: `₹${o.total}`,
       status: RECENT_STATUS[o.status] ?? 'PENDING',
     }

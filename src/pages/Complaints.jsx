@@ -15,6 +15,7 @@ import {
 } from 'lucide-react'
 import Topbar, { TopIcons } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
+import { orderCode } from '../lib/format.js'
 
 // Visual styling per known complaint category. Unknown categories fall back to
 // a neutral style with a prettified label (see typeMetaFor below), so the page
@@ -79,7 +80,7 @@ export default function Complaints() {
         `id, order_id, customer_id, category, description, status, created_at,
          customer:profiles(full_name, phone),
          order:orders(
-           id, total, delivery_address, delivery_fee, discount_amount, coupon_code,
+           id, order_number, total, delivery_address, delivery_fee, discount_amount, coupon_code,
            order_items(quantity, price_at_order, products(name, photo_url)),
            rider:profiles!orders_rider_id_fkey(full_name, phone)
          )`
@@ -95,7 +96,7 @@ export default function Complaints() {
             id: row.id,
             code: shortId(row.id, 'COMP'),
             orderId: row.order_id,
-            orderShortId: shortId(row.order_id, 'ORD'),
+            orderShortId: row.order_id ? orderCode(order) : '—',
             customerName: cust.full_name || addr.name || 'Customer',
             customerPhone: cust.phone || addr.phone || '',
             customerAddress: addr.address || '—',
