@@ -133,15 +133,14 @@ function buildBillHtml(order) {
     </div>`
 }
 
-// Open a hidden iframe with the KOT + bill and trigger the print dialog once.
-// The two tickets are separated by a page break so each prints on its own slip.
-function printOrderDocs(order) {
-  if (!order) return
+// Open a hidden iframe with the given ticket markup and trigger the print
+// dialog, formatted for an 80mm thermal roll.
+function printTickets(title, innerHtml) {
   const html = `<!doctype html>
     <html>
       <head>
         <meta charset="utf-8" />
-        <title>Order ${order.id}</title>
+        <title>${title}</title>
         <style>
           @page { size: 80mm auto; margin: 4mm; }
           * { box-sizing: border-box; }
@@ -163,10 +162,7 @@ function printOrderDocs(order) {
           .small { font-size: 11px; }
         </style>
       </head>
-      <body>
-        ${buildKotHtml(order)}
-        ${buildBillHtml(order)}
-      </body>
+      <body>${innerHtml}</body>
     </html>`
 
   const iframe = document.createElement('iframe')
@@ -188,6 +184,18 @@ function printOrderDocs(order) {
     }
     setTimeout(() => iframe.remove(), 2000)
   }, 300)
+}
+
+// Print only the kitchen KOT (food + quantity, no prices).
+function printKot(order) {
+  if (!order) return
+  printTickets(`KOT ${orderCode(order)}`, buildKotHtml(order))
+}
+
+// Print only the customer bill (full itemised pricing).
+function printBill(order) {
+  if (!order) return
+  printTickets(`Bill ${orderCode(order)}`, buildBillHtml(order))
 }
 
 // Map prep status to badge styles
@@ -353,10 +361,6 @@ export default function Orders() {
       return
     }
     patchLocal(order.id, patch)
-    // On acceptance, auto-print the kitchen KOT (no prices) + the customer bill.
-    if (order.status === 'pending') {
-      printOrderDocs(order)
-    }
   }
 
   const cancel = async (order) => {
@@ -384,10 +388,6 @@ export default function Orders() {
   const pendingCount = activeOrders.filter(o => getTabForOrder(o) === 'pending').length
   const preparingCount = activeOrders.filter(o => getTabForOrder(o) === 'preparing').length
   const readyCount = activeOrders.filter(o => getTabForOrder(o) === 'ready').length
-
-  const handlePrint = (order) => {
-    printOrderDocs(order)
-  }
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-canvas">
@@ -595,11 +595,18 @@ export default function Orders() {
 
                   <div className="flex items-center gap-2">
                     <button
-                      onClick={() => handlePrint(selectedOrder)}
-                      className="flex items-center gap-1.5 rounded-lg border border-line bg-white px-3 py-2 text-xs font-medium text-ink hover:bg-canvas transition-colors"
-                      title="Print receipt"
+                      onClick={() => printKot(selectedOrder)}
+                      className="flex items-center gap-1.5 rounded-lg border border-line bg-white px-3 py-2 text-xs font-semibold text-ink hover:bg-canvas transition-colors"
+                      title="Print kitchen KOT (no prices)"
                     >
-                      <Printer className="h-4 w-4" /> Print
+                      <ChefHat className="h-4 w-4" /> Print KOT
+                    </button>
+                    <button
+                      onClick={() => printBill(selectedOrder)}
+                      className="flex items-center gap-1.5 rounded-lg border border-line bg-white px-3 py-2 text-xs font-semibold text-ink hover:bg-canvas transition-colors"
+                      title="Print customer bill"
+                    >
+                      <Printer className="h-4 w-4" /> Print Customer Bill
                     </button>
                   </div>
                 </div>

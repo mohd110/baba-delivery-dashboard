@@ -223,59 +223,35 @@ export default function Complaints() {
 
           {/* Status Tabs */}
           <div className="grid grid-cols-3 border-b border-line bg-canvas/30 p-1.5 text-xs font-semibold">
-            <button
-              onClick={() => {
-                setActiveTab('open')
-                const comps = complaints.filter((c) => c.status === 'open')
-                if (comps.length > 0) setSelectedComplaintId(comps[0].id)
-              }}
-              className={`rounded-md py-2.5 transition-colors relative flex items-center justify-center gap-1.5 ${
-                activeTab === 'open'
-                  ? 'bg-white text-brand shadow-sm border border-line-soft'
-                  : 'text-ink-soft hover:text-ink'
-              }`}
-            >
-              <span>Active</span>
-              {openCount > 0 && (
-                <span className="flex h-4 min-w-[16px] items-center justify-center rounded-full bg-brand text-[9px] font-bold text-white px-1">
-                  {openCount}
-                </span>
-              )}
-            </button>
-
-            <button
-              onClick={() => {
-                setActiveTab('resolved')
-                const comps = complaints.filter((c) => c.status === 'resolved')
-                if (comps.length > 0) setSelectedComplaintId(comps[0].id)
-              }}
-              className={`rounded-md py-2.5 transition-colors relative flex items-center justify-center gap-1.5 ${
-                activeTab === 'resolved'
-                  ? 'bg-white text-pos-dark shadow-sm border border-line-soft'
-                  : 'text-ink-soft hover:text-ink'
-              }`}
-            >
-              <span>Resolved</span>
-              {resolvedCount > 0 && (
-                <span className="flex h-4 min-w-[16px] items-center justify-center rounded-full bg-pos text-[9px] font-bold text-white px-1">
-                  {resolvedCount}
-                </span>
-              )}
-            </button>
-
-            <button
-              onClick={() => {
-                setActiveTab('all')
-                if (complaints.length > 0) setSelectedComplaintId(complaints[0].id)
-              }}
-              className={`rounded-md py-2.5 transition-colors relative flex items-center justify-center ${
-                activeTab === 'all'
-                  ? 'bg-white text-ink shadow-sm border border-line-soft'
-                  : 'text-ink-soft hover:text-ink'
-              }`}
-            >
-              All Logs
-            </button>
+            {[
+              { key: 'open', label: 'Active', count: openCount, activeText: 'text-brand', badge: 'bg-brand' },
+              { key: 'resolved', label: 'Resolved', count: resolvedCount, activeText: 'text-pos-dark', badge: 'bg-pos' },
+              { key: 'all', label: 'All Logs', count: complaints.length, activeText: 'text-ink', badge: 'bg-ink-soft' },
+            ].map((tab) => (
+              <button
+                key={tab.key}
+                onClick={() => {
+                  setActiveTab(tab.key)
+                  // Select the first complaint visible under the newly chosen tab.
+                  const first = complaints.find(
+                    (c) => tab.key === 'all' || c.status === tab.key
+                  )
+                  if (first) setSelectedComplaintId(first.id)
+                }}
+                className={`rounded-md py-2.5 transition-colors relative flex items-center justify-center gap-1.5 ${
+                  activeTab === tab.key
+                    ? `bg-white ${tab.activeText} shadow-sm border border-line-soft`
+                    : 'text-ink-soft hover:text-ink'
+                }`}
+              >
+                <span>{tab.label}</span>
+                {tab.count > 0 && (
+                  <span className={`flex h-4 min-w-[16px] items-center justify-center rounded-full ${tab.badge} text-[9px] font-bold text-white px-1`}>
+                    {tab.count}
+                  </span>
+                )}
+              </button>
+            ))}
           </div>
 
           {/* Complaints cards */}

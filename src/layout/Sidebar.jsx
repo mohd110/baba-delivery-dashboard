@@ -60,14 +60,11 @@ export default function Sidebar() {
       .not('status', 'in', '("delivered","cancelled")')
     if (!ordErr) setActiveCount(ordCount ?? 0)
 
-    // For complaints, we count orders with active complaints or cancelled orders
-    // If there's no complaints table, we'll check cancelled orders as a proxy
-    // Let's query both or fallback safely.
+    // Active complaints: rows in the complaints table that aren't resolved/closed.
     const { count: compCount, error: compErr } = await supabase
-      .from('orders')
+      .from('complaints')
       .select('id', { count: 'exact', head: true })
-      .eq('status', 'cancelled')
-      .eq('payment_status', 'verified') // proxy for complaints: paid but cancelled
+      .not('status', 'in', '("resolved","closed")')
     if (!compErr) setComplaintCount(compCount ?? 0)
   }
 
@@ -77,6 +74,7 @@ export default function Sidebar() {
     const channel = supabase
       .channel('sidebar-badges')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => fetchCounts())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'complaints' }, () => fetchCounts())
       .subscribe()
     return () => {
       supabase.removeChannel(channel)
