@@ -97,6 +97,7 @@ export default function OrderNotifications() {
           const id = ++toastSeq
           const toast = {
             id,
+            orderId: o.id || null,
             code: o.id ? `ORD-${String(o.id).slice(0, 4).toUpperCase()}` : 'New order',
             total: typeof o.total === 'number' ? o.total : null,
             name: addr.name || 'New customer',
@@ -117,10 +118,18 @@ export default function OrderNotifications() {
 
   if (toasts.length === 0) return null
 
-  const open = (id) => {
+  // Clicking anywhere on a toast silences the alarm and jumps straight to
+  // that order in the Active Orders screen.
+  const open = (toast) => {
+    stopAlarm()
+    setToasts((list) => list.filter((t) => t.id !== toast.id))
+    navigate(toast.orderId ? `/orders?order=${toast.orderId}` : '/orders')
+  }
+
+  // Dismiss a single toast and silence the alarm without navigating.
+  const silence = (id) => {
     stopAlarm()
     setToasts((list) => list.filter((t) => t.id !== id))
-    navigate('/orders')
   }
 
   return (
@@ -129,7 +138,7 @@ export default function OrderNotifications() {
         <button
           key={t.id}
           type="button"
-          onClick={() => open(t.id)}
+          onClick={() => open(t)}
           className="pointer-events-auto flex w-full items-start gap-3 rounded-xl border border-line bg-white p-4 text-left shadow-[0_8px_24px_rgba(0,0,0,0.12)] transition-shadow hover:shadow-[0_10px_28px_rgba(0,0,0,0.18)]"
         >
           <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#ffdad3] text-brand">
@@ -150,8 +159,7 @@ export default function OrderNotifications() {
             tabIndex={-1}
             onClick={(e) => {
               e.stopPropagation()
-              stopAlarm()
-              setToasts((list) => list.filter((x) => x.id !== t.id))
+              silence(t.id)
             }}
             className="shrink-0 text-ink-soft hover:text-ink"
             aria-label="Dismiss and silence alarm"

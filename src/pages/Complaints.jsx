@@ -5,95 +5,131 @@ import {
   CheckCircle,
   Clock,
   Phone,
-  Wallet,
   CornerUpLeft,
   Truck,
   Check,
   User,
-  Hash,
+  Tag,
   AlertCircle,
   HelpCircle,
 } from 'lucide-react'
 import Topbar, { TopIcons } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
 
+// Visual styling per known complaint category. Unknown categories fall back to
+// a neutral style with a prettified label (see typeMetaFor below), so the page
+// keeps working even if new category values are added in the database.
 const COMPLAINT_TYPES = {
   missing_item: { label: 'Missing Item', color: 'bg-red-50 text-red-700 border-red-100', icon: AlertCircle },
   late_delivery: { label: 'Late Delivery', color: 'bg-amber-50 text-amber-700 border-amber-100', icon: Clock },
   poor_quality: { label: 'Food Quality / Cold', color: 'bg-orange-50 text-orange-700 border-orange-100', icon: AlertTriangle },
+  food_quality: { label: 'Food Quality / Cold', color: 'bg-orange-50 text-orange-700 border-orange-100', icon: AlertTriangle },
   wrong_order: { label: 'Wrong Order Delivered', color: 'bg-purple-50 text-purple-700 border-purple-100', icon: AlertTriangle },
+  wrong_item: { label: 'Wrong Item', color: 'bg-purple-50 text-purple-700 border-purple-100', icon: AlertTriangle },
+  damaged: { label: 'Damaged Packaging', color: 'bg-rose-50 text-rose-700 border-rose-100', icon: AlertTriangle },
+  billing: { label: 'Billing Issue', color: 'bg-blue-50 text-blue-700 border-blue-100', icon: Tag },
+  payment: { label: 'Payment Issue', color: 'bg-blue-50 text-blue-700 border-blue-100', icon: Tag },
+  rider_behavior: { label: 'Rider Behaviour', color: 'bg-indigo-50 text-indigo-700 border-indigo-100', icon: Truck },
+  other: { label: 'Other', color: 'bg-slate-50 text-slate-700 border-slate-100', icon: HelpCircle },
 }
 
-const MOCK_ISSUES = [
-  { type: 'missing_item', desc: 'Butter Chicken was present but the two Garlic Naans were missing from the package. Please refund.', severity: 'Medium' },
-  { type: 'late_delivery', desc: 'The order took more than 50 minutes to arrive. The food was cold and rubbery. Extremely disappointed.', severity: 'High' },
-  { type: 'poor_quality', desc: 'The paneer tikka was extremely dry and burnt on the edges. Gravy also spilled inside the carry bag.', severity: 'Low' },
-  { type: 'wrong_order', desc: 'Received a mutton biryani instead of the veg paneer biryani I ordered. I am a strict vegetarian!', severity: 'Critical' },
-]
+function prettify(value) {
+  return String(value || 'Other')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
+function typeMetaFor(category) {
+  const key = String(category || '').toLowerCase()
+  return (
+    COMPLAINT_TYPES[key] || {
+      label: prettify(category),
+      color: 'bg-slate-50 text-slate-700 border-slate-100',
+      icon: HelpCircle,
+    }
+  )
+}
+
+// Anything that isn't an explicit "still needs attention" state is treated as
+// resolved for the Active/Resolved tab split.
+const OPEN_STATES = new Set(['open', 'pending', 'in_progress', 'new', 'reopened'])
+function normStatus(status) {
+  return OPEN_STATES.has(String(status || 'open').toLowerCase()) ? 'open' : 'resolved'
+}
+
+function shortId(id, prefix) {
+  return id ? `${prefix}-${String(id).slice(0, 4).toUpperCase()}` : '—'
+}
 
 export default function Complaints() {
-  const [orders, setOrders] = useState([])
   const [complaints, setComplaints] = useState([])
   const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [activeTab, setActiveTab] = useState('open') // 'open', 'resolved', 'all'
   const [selectedComplaintId, setSelectedComplaintId] = useState(null)
   const [toastMessage, setToastMessage] = useState(null)
 
-  // Load orders to map actual orders to mock complaints so they link to real DB data
+  // Load real complaints from the database, joined to the originating order
+  // (for the receipt + rider) and the customer profile.
   const load = useCallback(() => {
     return supabase
-      .from('orders')
+      .from('complaints')
       .select(
-        '*, order_items(quantity, price_at_order, products(name, photo_url)), rider:profiles!orders_rider_id_fkey(full_name, phone)'
+        `id, order_id, customer_id, category, description, status, created_at,
+         customer:profiles(full_name, phone),
+         order:orders(
+           id, total, delivery_address, delivery_fee, discount_amount, coupon_code,
+           order_items(quantity, price_at_order, products(name, photo_url)),
+           rider:profiles!orders_rider_id_fkey(full_name, phone)
+         )`
       )
       .order('created_at', { ascending: false })
       .then(({ data, error }) => {
-        if (error) console.error('Failed to load orders for complaints:', error.message)
-        const dbOrders = data ?? []
-        setOrders(dbOrders)
-
-        // Seed complaints based on database orders (especially cancelled or unpaid ones)
-        // We will generate a structured list of complaints linked to these orders
-        if (dbOrders.length > 0) {
-          const list = dbOrders.slice(0, 8).map((order, index) => {
-            const mockIssue = MOCK_ISSUES[index % MOCK_ISSUES.length]
-            const dateOffset = new Date(order.created_at)
-            dateOffset.setMinutes(dateOffset.getMinutes() + 15) // complaint filed shortly after order
-
-            return {
-              id: `COMP-${order.id.slice(0, 4).toUpperCase()}`,
-              orderId: order.id,
-              orderShortId: `ORD-${order.id.slice(0, 4).toUpperCase()}`,
-              customerName: order.delivery_address?.name || 'Customer',
-              customerPhone: order.delivery_address?.phone || '—',
-              customerAddress: order.delivery_address?.address || '—',
-              timestamp: dateOffset.toISOString(),
-              status: index % 3 === 0 ? 'resolved' : 'open', // mix of resolved and open
-              issueType: mockIssue.type,
-              description: mockIssue.desc,
-              severity: mockIssue.severity,
-              orderTotal: order.total,
-              items: order.order_items || [],
-              rider: order.rider,
-            }
-          })
-          setComplaints(list)
-          
-          // Select the first open complaint
-          const openComps = list.filter(c => c.status === 'open')
-          if (openComps.length > 0) {
-            setSelectedComplaintId(openComps[0].id)
-          } else if (list.length > 0) {
-            setSelectedComplaintId(list[0].id)
+        if (error) console.error('Failed to load complaints:', error.message)
+        const list = (data ?? []).map((row) => {
+          const order = row.order || {}
+          const addr = order.delivery_address || {}
+          const cust = row.customer || {}
+          return {
+            id: row.id,
+            code: shortId(row.id, 'COMP'),
+            orderId: row.order_id,
+            orderShortId: shortId(row.order_id, 'ORD'),
+            customerName: cust.full_name || addr.name || 'Customer',
+            customerPhone: cust.phone || addr.phone || '',
+            customerAddress: addr.address || '—',
+            timestamp: row.created_at,
+            status: normStatus(row.status),
+            category: row.category,
+            description: row.description || 'No description provided.',
+            orderTotal: typeof order.total === 'number' ? order.total : null,
+            items: order.order_items || [],
+            rider: order.rider || null,
           }
-        }
+        })
+        setComplaints(list)
+
+        // Keep the current selection if it still exists; otherwise pick the
+        // first open complaint (falling back to the first of any).
+        setSelectedComplaintId((prev) => {
+          if (prev && list.some((c) => c.id === prev)) return prev
+          const firstOpen = list.find((c) => c.status === 'open')
+          return firstOpen?.id ?? list[0]?.id ?? null
+        })
         setLoading(false)
       })
   }, [])
 
   useEffect(() => {
     load()
+    const channel = supabase
+      .channel('complaints-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'complaints' }, () => load())
+      .subscribe()
+    return () => {
+      supabase.removeChannel(channel)
+    }
   }, [load])
 
   // Filter complaints
@@ -107,7 +143,7 @@ export default function Complaints() {
         c.customerName.toLowerCase().includes(q) ||
         c.orderShortId.toLowerCase().includes(q) ||
         c.description.toLowerCase().includes(q) ||
-        c.id.toLowerCase().includes(q)
+        c.code.toLowerCase().includes(q)
       )
     }
     return true
@@ -115,29 +151,30 @@ export default function Complaints() {
 
   const selectedComplaint = complaints.find((c) => c.id === selectedComplaintId)
 
-  // Resolve complaint action
-  const handleResolve = (id) => {
-    setComplaints(prev =>
-      prev.map(c => c.id === id ? { ...c, status: 'resolved' } : c)
-    )
-    showToast('Complaint marked as RESOLVED successfully.')
+  // Persist a status change to the database, then update local state.
+  const setResolved = async (id, message) => {
+    if (busy) return
+    setBusy(id)
+    const { error } = await supabase.from('complaints').update({ status: 'resolved' }).eq('id', id)
+    setBusy(null)
+    if (error) {
+      showToast(`Could not update complaint: ${error.message}`)
+      return false
+    }
+    setComplaints((prev) => prev.map((c) => (c.id === id ? { ...c, status: 'resolved' } : c)))
+    if (message) showToast(message)
+    return true
   }
 
-  // Refund order action
-  const handleRefund = async (orderId) => {
-    showToast('Initiating refund process... ₹' + selectedComplaint.orderTotal + ' will be credited back.')
-    // Update local state status to resolved too
-    setComplaints(prev =>
-      prev.map(c => c.orderId === orderId ? { ...c, status: 'resolved' } : c)
-    )
+  const handleResolve = (id) => setResolved(id, 'Complaint marked as RESOLVED successfully.')
+
+  const handleRefund = (complaint) => {
+    const amount = complaint.orderTotal != null ? `₹${complaint.orderTotal}` : 'the order amount'
+    setResolved(complaint.id, `Refund initiated. ${amount} will be credited back to the customer.`)
   }
 
-  // Re-dispatch order action
-  const handleRedispatch = (orderId) => {
-    showToast('Re-dispatch order scheduled. A new active order has been queued in kitchen.')
-    setComplaints(prev =>
-      prev.map(c => c.orderId === orderId ? { ...c, status: 'resolved' } : c)
-    )
+  const handleRedispatch = (complaint) => {
+    setResolved(complaint.id, 'Re-dispatch scheduled. A new active order has been queued in the kitchen.')
   }
 
   const showToast = (msg) => {
@@ -147,8 +184,8 @@ export default function Complaints() {
     }, 4000)
   }
 
-  const openCount = complaints.filter(c => c.status === 'open').length
-  const resolvedCount = complaints.filter(c => c.status === 'resolved').length
+  const openCount = complaints.filter((c) => c.status === 'open').length
+  const resolvedCount = complaints.filter((c) => c.status === 'resolved').length
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-canvas">
@@ -188,7 +225,7 @@ export default function Complaints() {
             <button
               onClick={() => {
                 setActiveTab('open')
-                const comps = complaints.filter(c => c.status === 'open')
+                const comps = complaints.filter((c) => c.status === 'open')
                 if (comps.length > 0) setSelectedComplaintId(comps[0].id)
               }}
               className={`rounded-md py-2.5 transition-colors relative flex items-center justify-center gap-1.5 ${
@@ -208,7 +245,7 @@ export default function Complaints() {
             <button
               onClick={() => {
                 setActiveTab('resolved')
-                const comps = complaints.filter(c => c.status === 'resolved')
+                const comps = complaints.filter((c) => c.status === 'resolved')
                 if (comps.length > 0) setSelectedComplaintId(comps[0].id)
               }}
               className={`rounded-md py-2.5 transition-colors relative flex items-center justify-center gap-1.5 ${
@@ -251,13 +288,13 @@ export default function Complaints() {
                 <CheckCircle className="h-10 w-10 text-pos mb-2" />
                 <p className="text-sm font-semibold text-ink">All clear!</p>
                 <p className="text-xs text-ink-soft mt-1">
-                  No active complaints found matching this filter.
+                  No complaints found matching this filter.
                 </p>
               </div>
             ) : (
               filteredComplaints.map((c) => {
                 const isSelected = c.id === selectedComplaintId
-                const typeMeta = COMPLAINT_TYPES[c.issueType] ?? COMPLAINT_TYPES.missing_item
+                const typeMeta = typeMetaFor(c.category)
                 const ComplaintIcon = typeMeta.icon
 
                 // Format timestamp
@@ -272,7 +309,7 @@ export default function Complaints() {
                     }`}
                   >
                     <div className="flex justify-between items-center">
-                      <span className="text-xs font-bold text-ink">{c.id}</span>
+                      <span className="text-xs font-bold text-ink">{c.code}</span>
                       <span className="text-[10px] text-ink-soft">{formattedTime}</span>
                     </div>
 
@@ -292,15 +329,13 @@ export default function Complaints() {
                       <span className={`inline-flex items-center gap-1 border px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wide ${typeMeta.color}`}>
                         <ComplaintIcon className="h-2.5 w-2.5" /> {typeMeta.label}
                       </span>
-                      
-                      <span className={`text-[9px] font-bold px-1.5 rounded-full ${
-                        c.severity === 'Critical' || c.severity === 'High'
+
+                      <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
+                        c.status === 'open'
                           ? 'bg-red-100 text-red-700'
-                          : c.severity === 'Medium'
-                          ? 'bg-amber-100 text-amber-800'
-                          : 'bg-blue-50 text-blue-700'
+                          : 'bg-pos-soft text-pos-dark'
                       }`}>
-                        {c.severity} Severity
+                        {c.status === 'open' ? 'Open' : 'Resolved'}
                       </span>
                     </div>
                   </div>
@@ -320,7 +355,7 @@ export default function Complaints() {
                   <div>
                     <div className="flex items-center gap-3">
                       <h2 className="text-lg font-bold text-ink">
-                        Complaint Report: {selectedComplaint.id}
+                        Complaint Report: {selectedComplaint.code}
                       </h2>
                       <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-bold ${
                         selectedComplaint.status === 'open' ? 'bg-red-50 text-red-700' : 'bg-pos-soft text-pos-dark'
@@ -339,13 +374,24 @@ export default function Complaints() {
 
               {/* Grid content */}
               <div className="grid flex-1 grid-cols-1 lg:grid-cols-3 gap-6 p-6">
-                {/* Left Area (Complaint statement, timeline, items) */}
+                {/* Left Area (Complaint statement, customer, items) */}
                 <div className="lg:col-span-2 space-y-6">
                   {/* Issue Statement */}
                   <div className="rounded-xl border border-line bg-white p-5 shadow-sm space-y-3">
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-ink-soft">
-                      Complaint Statement
-                    </h3>
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-ink-soft">
+                        Complaint Statement
+                      </h3>
+                      {(() => {
+                        const typeMeta = typeMetaFor(selectedComplaint.category)
+                        const ComplaintIcon = typeMeta.icon
+                        return (
+                          <span className={`inline-flex items-center gap-1 border px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wide ${typeMeta.color}`}>
+                            <ComplaintIcon className="h-2.5 w-2.5" /> {typeMeta.label}
+                          </span>
+                        )
+                      })()}
+                    </div>
                     <div className="p-4 rounded-lg bg-red-50/30 border border-red-100/50">
                       <p className="text-sm text-ink font-medium leading-relaxed italic">
                         "{selectedComplaint.description}"
@@ -390,18 +436,26 @@ export default function Complaints() {
                     <h3 className="text-xs font-bold uppercase tracking-wider text-ink-soft mb-3">
                       Original Order Receipt
                     </h3>
-                    <div className="divide-y divide-line-soft">
-                      {selectedComplaint.items?.map((it, idx) => (
-                        <div key={idx} className="flex justify-between items-center py-2.5 text-xs text-ink font-semibold">
-                          <span>{it.quantity} × {it.products?.name || 'Item'}</span>
-                          <span>₹{(it.price_at_order ?? 0) * (it.quantity ?? 1)}</span>
+                    {selectedComplaint.items.length > 0 ? (
+                      <div className="divide-y divide-line-soft">
+                        {selectedComplaint.items.map((it, idx) => (
+                          <div key={idx} className="flex justify-between items-center py-2.5 text-xs text-ink font-semibold">
+                            <span>{it.quantity} × {it.products?.name || 'Item'}</span>
+                            <span>₹{(it.price_at_order ?? 0) * (it.quantity ?? 1)}</span>
+                          </div>
+                        ))}
+                        <div className="flex justify-between items-center py-3 font-bold text-sm border-t border-line border-dashed mt-2">
+                          <span className="text-ink">Order Receipt Total</span>
+                          <span className="text-brand">
+                            {selectedComplaint.orderTotal != null ? `₹${selectedComplaint.orderTotal}` : '—'}
+                          </span>
                         </div>
-                      ))}
-                      <div className="flex justify-between items-center py-3 font-bold text-sm border-t border-line border-dashed mt-2">
-                        <span className="text-ink">Order Receipt Total</span>
-                        <span className="text-brand">₹{selectedComplaint.orderTotal}</span>
                       </div>
-                    </div>
+                    ) : (
+                      <p className="text-xs text-ink-soft text-center py-4">
+                        No order items linked to this complaint.
+                      </p>
+                    )}
                   </div>
                 </div>
 
@@ -424,7 +478,7 @@ export default function Complaints() {
                           </div>
                         </div>
                         <div className="p-2.5 rounded-lg bg-canvas text-ink-soft text-[11px]">
-                          Courier assigned. Delivery was completed. No incident reports was registered by rider app.
+                          Courier assigned. Delivery was completed. No incident reports were registered by the rider app.
                         </div>
                       </div>
                     ) : (
@@ -437,19 +491,20 @@ export default function Complaints() {
                     <h3 className="text-xs font-bold uppercase tracking-wider text-ink-soft">
                       Resolution Actions
                     </h3>
-                    
+
                     <div className="space-y-2">
                       <button
-                        onClick={() => handleRefund(selectedComplaint.orderId)}
-                        disabled={selectedComplaint.status === 'resolved'}
+                        onClick={() => handleRefund(selectedComplaint)}
+                        disabled={selectedComplaint.status === 'resolved' || busy === selectedComplaint.id}
                         className="flex w-full items-center justify-center gap-2 rounded-lg bg-brand py-2.5 text-xs font-bold text-white hover:bg-brand-dark transition-colors shadow-sm disabled:opacity-50"
                       >
-                        <CornerUpLeft className="h-4 w-4" /> Refund Customer (₹{selectedComplaint.orderTotal})
+                        <CornerUpLeft className="h-4 w-4" /> Refund Customer
+                        {selectedComplaint.orderTotal != null ? ` (₹${selectedComplaint.orderTotal})` : ''}
                       </button>
 
                       <button
-                        onClick={() => handleRedispatch(selectedComplaint.orderId)}
-                        disabled={selectedComplaint.status === 'resolved'}
+                        onClick={() => handleRedispatch(selectedComplaint)}
+                        disabled={selectedComplaint.status === 'resolved' || busy === selectedComplaint.id}
                         className="flex w-full items-center justify-center gap-2 rounded-lg border border-line bg-white py-2.5 text-xs font-bold text-ink hover:bg-canvas transition-colors disabled:opacity-50"
                       >
                         <Truck className="h-4 w-4" /> Re-dispatch Missing Items
@@ -458,7 +513,8 @@ export default function Complaints() {
                       {selectedComplaint.status === 'open' ? (
                         <button
                           onClick={() => handleResolve(selectedComplaint.id)}
-                          className="flex w-full items-center justify-center gap-2 rounded-lg bg-pos py-2.5 text-xs font-bold text-white hover:bg-pos-dark transition-colors shadow-sm"
+                          disabled={busy === selectedComplaint.id}
+                          className="flex w-full items-center justify-center gap-2 rounded-lg bg-pos py-2.5 text-xs font-bold text-white hover:bg-pos-dark transition-colors shadow-sm disabled:opacity-50"
                         >
                           <Check className="h-4 w-4" strokeWidth={3} /> Mark Complaint Resolved
                         </button>

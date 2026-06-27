@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   ClipboardList,
   ChefHat,
@@ -40,6 +41,152 @@ function elapsed(iso) {
   const hr = Math.floor(min / 60)
   if (hr < 24) return `${hr}h ${min % 60}m`
   return `${Math.floor(hr / 24)}d`
+}
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"]/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])
+  )
+}
+
+// Kitchen Order Ticket: food + quantity only, never any prices.
+function buildKotHtml(order) {
+  const shortId = `ORD-${order.id.slice(0, 4).toUpperCase()}`
+  const placed = new Date(order.created_at).toLocaleString('en-IN')
+  const items = order.order_items ?? []
+  const rows = items
+    .map(
+      (it) => `
+        <tr>
+          <td class="qty">${it.quantity ?? 1}×</td>
+          <td class="name">${escapeHtml(it.products?.name || 'Item')}</td>
+        </tr>`
+    )
+    .join('')
+  return `
+    <div class="ticket">
+      <h1>KITCHEN KOT</h1>
+      <div class="meta">
+        <div class="big">${shortId}</div>
+        <div>${placed}</div>
+        <div class="up">${escapeHtml(order.order_type || 'delivery')}</div>
+        <div>${escapeHtml(order.delivery_address?.name || 'Customer')}</div>
+      </div>
+      <hr />
+      <table>
+        <tbody>${rows}</tbody>
+      </table>
+      <hr />
+      <div class="center small">— kitchen copy · no prices —</div>
+    </div>`
+}
+
+// Customer bill: full itemised pricing breakdown.
+function buildBillHtml(order) {
+  const shortId = `ORD-${order.id.slice(0, 4).toUpperCase()}`
+  const placed = new Date(order.created_at).toLocaleString('en-IN')
+  const addr = order.delivery_address || {}
+  const items = order.order_items ?? []
+  const subtotal = items.reduce(
+    (s, it) => s + (it.price_at_order ?? 0) * (it.quantity ?? 1),
+    0
+  )
+  const rows = items
+    .map((it) => {
+      const lineTotal = (it.price_at_order ?? 0) * (it.quantity ?? 1)
+      return `
+        <tr>
+          <td class="qty">${it.quantity ?? 1}×</td>
+          <td class="name">${escapeHtml(it.products?.name || 'Item')}</td>
+          <td class="amt">₹${lineTotal}</td>
+        </tr>`
+    })
+    .join('')
+  const discountRow =
+    order.discount_amount > 0
+      ? `<div class="row"><span>Discount${
+          order.coupon_code ? ` (${escapeHtml(order.coupon_code)})` : ''
+        }</span><span>−₹${order.discount_amount}</span></div>`
+      : ''
+  return `
+    <div class="ticket">
+      <h1>CUSTOMER BILL</h1>
+      <div class="meta">
+        <div class="big">${shortId}</div>
+        <div>${placed}</div>
+        <div>${escapeHtml(addr.name || 'Customer')}</div>
+        ${addr.phone ? `<div>${escapeHtml(addr.phone)}</div>` : ''}
+        ${addr.address ? `<div class="small">${escapeHtml(addr.address)}</div>` : ''}
+      </div>
+      <hr />
+      <table>
+        <tbody>${rows}</tbody>
+      </table>
+      <hr />
+      <div class="row"><span>Subtotal</span><span>₹${subtotal}</span></div>
+      <div class="row"><span>Delivery Fee</span><span>₹${order.delivery_fee ?? 0}</span></div>
+      ${discountRow}
+      <div class="row total"><span>TOTAL</span><span>₹${order.total}</span></div>
+      <hr />
+      <div class="center small">Thank you! · Payment: UPI / Online</div>
+    </div>`
+}
+
+// Open a hidden iframe with the KOT + bill and trigger the print dialog once.
+// The two tickets are separated by a page break so each prints on its own slip.
+function printOrderDocs(order) {
+  if (!order) return
+  const html = `<!doctype html>
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        <title>Order ${order.id}</title>
+        <style>
+          @page { size: 80mm auto; margin: 4mm; }
+          * { box-sizing: border-box; }
+          body { font-family: 'Courier New', monospace; color: #000; margin: 0; }
+          .ticket { width: 100%; page-break-after: always; }
+          .ticket:last-child { page-break-after: auto; }
+          h1 { text-align: center; font-size: 16px; margin: 0 0 6px; letter-spacing: 1px; }
+          hr { border: none; border-top: 1px dashed #000; margin: 6px 0; }
+          .meta { text-align: center; font-size: 12px; line-height: 1.4; }
+          .meta .big { font-size: 15px; font-weight: bold; }
+          .up { text-transform: uppercase; }
+          table { width: 100%; border-collapse: collapse; font-size: 13px; }
+          td { padding: 2px 0; vertical-align: top; }
+          td.qty { width: 32px; font-weight: bold; }
+          td.amt { text-align: right; white-space: nowrap; }
+          .row { display: flex; justify-content: space-between; font-size: 13px; padding: 1px 0; }
+          .row.total { font-size: 15px; font-weight: bold; margin-top: 4px; }
+          .center { text-align: center; }
+          .small { font-size: 11px; }
+        </style>
+      </head>
+      <body>
+        ${buildKotHtml(order)}
+        ${buildBillHtml(order)}
+      </body>
+    </html>`
+
+  const iframe = document.createElement('iframe')
+  iframe.setAttribute('aria-hidden', 'true')
+  iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;'
+  document.body.appendChild(iframe)
+  const win = iframe.contentWindow
+  const doc = win.document
+  doc.open()
+  doc.write(html)
+  doc.close()
+  // Give the iframe a tick to lay out before invoking the print dialog.
+  setTimeout(() => {
+    try {
+      win.focus()
+      win.print()
+    } catch {
+      /* printing unavailable — ignore */
+    }
+    setTimeout(() => iframe.remove(), 2000)
+  }, 300)
 }
 
 // Map prep status to badge styles
@@ -93,6 +240,7 @@ export default function Orders() {
   const [searchQuery, setSearchQuery] = useState('')
   const [activeTab, setActiveTab] = useState('pending') // 'pending', 'preparing', 'ready'
   const [checkedItems, setCheckedItems] = useState(new Set())
+  const [searchParams, setSearchParams] = useSearchParams()
 
   // Load orders
   const load = useCallback(() => {
@@ -139,6 +287,20 @@ export default function Orders() {
     if (['ready', 'out_for_delivery'].includes(order.status)) return 'ready'
     return 'completed' // For delivered/cancelled
   }
+
+  // When arriving from a new-order notification (/orders?order=<id>), jump to
+  // that order's tab and select it, then clear the param so it doesn't re-fire.
+  const focusOrderId = searchParams.get('order')
+  useEffect(() => {
+    if (!focusOrderId) return
+    const target = orders.find((o) => o.id === focusOrderId)
+    if (!target) return
+    const tab = getTabForOrder(target)
+    if (['pending', 'preparing', 'ready'].includes(tab)) setActiveTab(tab)
+    setSelectedOrderId(focusOrderId)
+    setSearchParams({}, { replace: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusOrderId, orders])
 
   // Filter orders by tab and search query
   const activeOrders = orders.filter((o) => !['delivered', 'cancelled'].includes(o.status))
@@ -190,6 +352,10 @@ export default function Orders() {
       return
     }
     patchLocal(order.id, patch)
+    // On acceptance, auto-print the kitchen KOT (no prices) + the customer bill.
+    if (order.status === 'pending') {
+      printOrderDocs(order)
+    }
   }
 
   const cancel = async (order) => {
@@ -219,7 +385,7 @@ export default function Orders() {
   const readyCount = activeOrders.filter(o => getTabForOrder(o) === 'ready').length
 
   const handlePrint = (order) => {
-    window.print()
+    printOrderDocs(order)
   }
 
   return (
