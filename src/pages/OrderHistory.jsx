@@ -309,6 +309,16 @@ export default function OrderHistory() {
                 </span>
               </div>
 
+              {/* Cancellation reason (shown to customer) */}
+              {selectedOrder.status === 'cancelled' && selectedOrder.cancellation_reason && (
+                <div className="rounded-lg border border-red-100 bg-red-50 p-3">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-red-700 mb-1">
+                    Cancellation Reason
+                  </p>
+                  <p className="text-xs text-red-800">{selectedOrder.cancellation_reason}</p>
+                </div>
+              )}
+
               {/* Customer */}
               <div>
                 <h4 className="text-[10px] font-bold uppercase tracking-wider text-ink-soft mb-1.5">

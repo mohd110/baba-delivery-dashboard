@@ -19,6 +19,7 @@ import {
   Clock,
   ChevronRight,
   TrendingUp,
+  X,
 } from 'lucide-react'
 import Topbar, { TopIcons } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
@@ -217,6 +218,18 @@ const NEXT_ACTION = {
 
 const CANCELABLE = new Set(['pending', 'accepted', 'preparing'])
 
+// Preset cancellation reasons shown to the manager. The chosen text is saved on
+// the order so the customer can see why it was cancelled.
+const CANCEL_REASONS = [
+  'Restaurant is too busy right now',
+  'One or more items are out of stock',
+  'Restaurant is currently closed',
+  "We don't deliver to your area",
+  'Payment could not be verified',
+  'Customer requested cancellation',
+  'Other',
+]
+
 const PAYMENT = {
   pending_verification: { label: 'Awaiting Verification', bg: 'bg-amber-50', text: 'text-amber-700', dot: 'bg-amber-500' },
   verified: { label: 'Verified', bg: 'bg-pos-soft', text: 'text-pos-dark', dot: 'bg-pos' },
@@ -250,6 +263,10 @@ export default function Orders() {
   const [activeTab, setActiveTab] = useState('pending') // 'pending', 'preparing', 'ready'
   const [checkedItems, setCheckedItems] = useState(new Set())
   const [searchParams, setSearchParams] = useSearchParams()
+  // Cancellation flow: the order pending cancel + the chosen reason/note.
+  const [cancelTarget, setCancelTarget] = useState(null)
+  const [cancelReason, setCancelReason] = useState(CANCEL_REASONS[0])
+  const [cancelNote, setCancelNote] = useState('')
 
   // Load orders
   const load = useCallback(() => {
@@ -363,25 +380,40 @@ export default function Orders() {
     patchLocal(order.id, patch)
   }
 
-  const cancel = async (order) => {
+  // Open the cancellation dialog for an order (resets the reason picker).
+  const openCancel = (order) => {
     if (busy) return
-    const shortId = orderCode(order)
-    if (!window.confirm(`Cancel order ${shortId}? This cannot be undone.`)) return
+    setCancelReason(CANCEL_REASONS[0])
+    setCancelNote('')
+    setCancelTarget(order)
+  }
+
+  const confirmCancel = async () => {
+    const order = cancelTarget
+    if (!order) return
+    // "Other" contributes no preset text — the note becomes the whole reason.
+    const base = cancelReason === 'Other' ? '' : cancelReason
+    const note = cancelNote.trim()
+    const reason = [base, note].filter(Boolean).join(' — ')
+    if (!reason) {
+      alert('Please pick a reason or write a short note for the customer.')
+      return
+    }
     setBusy(order.id)
-    const { error } = await supabase.from('orders').update({ status: 'cancelled' }).eq('id', order.id)
+    const { error } = await supabase
+      .from('orders')
+      .update({ status: 'cancelled', cancellation_reason: reason })
+      .eq('id', order.id)
     setBusy(null)
     if (error) {
       alert(`Could not cancel order: ${error.message}`)
       return
     }
-    patchLocal(order.id, { status: 'cancelled' })
-    // Select another order
-    const remaining = activeOrders.filter(o => o.id !== order.id)
-    if (remaining.length > 0) {
-      setSelectedOrderId(remaining[0].id)
-    } else {
-      setSelectedOrderId(null)
-    }
+    patchLocal(order.id, { status: 'cancelled', cancellation_reason: reason })
+    setCancelTarget(null)
+    // Select another active order
+    const remaining = activeOrders.filter((o) => o.id !== order.id)
+    setSelectedOrderId(remaining.length > 0 ? remaining[0].id : null)
   }
 
   // Count counts for tabs
@@ -807,7 +839,7 @@ export default function Orders() {
                     <button
                       type="button"
                       disabled={busy === selectedOrder.id}
-                      onClick={() => cancel(selectedOrder)}
+                      onClick={() => openCancel(selectedOrder)}
                       className="flex items-center gap-1.5 rounded-lg border border-red-200 px-4 py-2.5 text-xs font-semibold text-red-600 hover:bg-red-50 hover:border-red-300 transition-colors disabled:opacity-50"
                     >
                       <Ban className="h-4 w-4" /> Cancel Order
@@ -853,6 +885,97 @@ export default function Orders() {
           )}
         </div>
       </div>
+
+      {/* Cancellation reason dialog */}
+      {cancelTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white shadow-xl">
+            <div className="flex items-start justify-between border-b border-line p-5">
+              <div className="flex items-center gap-2">
+                <span className="rounded-lg bg-red-50 p-2 text-red-600">
+                  <Ban className="h-5 w-5" />
+                </span>
+                <div>
+                  <h3 className="text-base font-bold text-ink">
+                    Cancel order {orderCode(cancelTarget)}
+                  </h3>
+                  <p className="text-xs text-ink-soft">
+                    The customer will see this reason.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCancelTarget(null)}
+                className="rounded p-1 text-ink-soft hover:bg-line-soft hover:text-ink transition-colors"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="max-h-[55vh] overflow-y-auto p-5">
+              <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-ink-soft">
+                Reason
+              </p>
+              <div className="space-y-1.5">
+                {CANCEL_REASONS.map((reason) => (
+                  <label
+                    key={reason}
+                    className={`flex cursor-pointer items-center gap-2.5 rounded-lg border px-3 py-2.5 text-sm transition-colors ${
+                      cancelReason === reason
+                        ? 'border-red-300 bg-red-50 text-ink'
+                        : 'border-line text-ink-soft hover:border-line hover:bg-canvas'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="cancel-reason"
+                      value={reason}
+                      checked={cancelReason === reason}
+                      onChange={() => setCancelReason(reason)}
+                      className="accent-red-600"
+                    />
+                    <span className="font-medium">{reason}</span>
+                  </label>
+                ))}
+              </div>
+
+              <p className="mb-2 mt-4 text-[10px] font-bold uppercase tracking-wider text-ink-soft">
+                {cancelReason === 'Other' ? 'Message to customer' : 'Add a note (optional)'}
+              </p>
+              <textarea
+                value={cancelNote}
+                onChange={(e) => setCancelNote(e.target.value)}
+                rows={3}
+                placeholder={
+                  cancelReason === 'Other'
+                    ? 'Tell the customer why their order is being cancelled…'
+                    : 'Any extra detail for the customer…'
+                }
+                className="w-full resize-none rounded-lg border border-line px-3 py-2 text-sm text-ink placeholder:text-ink-soft focus:border-red-300 focus:outline-none focus:ring-1 focus:ring-red-200"
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-3 border-t border-line p-5">
+              <button
+                type="button"
+                onClick={() => setCancelTarget(null)}
+                className="rounded-lg border border-line px-4 py-2.5 text-xs font-semibold text-ink-soft hover:bg-canvas transition-colors"
+              >
+                Keep order
+              </button>
+              <button
+                type="button"
+                disabled={busy === cancelTarget.id}
+                onClick={confirmCancel}
+                className="flex items-center gap-1.5 rounded-lg bg-red-600 px-5 py-2.5 text-xs font-bold text-white hover:bg-red-700 transition-colors disabled:opacity-50"
+              >
+                <Ban className="h-4 w-4" /> Cancel order
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
