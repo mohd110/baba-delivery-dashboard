@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
   ClipboardList,
@@ -20,6 +20,8 @@ import {
   ChevronRight,
   TrendingUp,
   X,
+  PackageX,
+  Hourglass,
 } from 'lucide-react'
 import Topbar, { TopIcons } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
@@ -43,6 +45,21 @@ function elapsed(iso) {
   const hr = Math.floor(min / 60)
   if (hr < 24) return `${hr}h ${min % 60}m`
   return `${Math.floor(hr / 24)}d`
+}
+
+// Line total for a single order item (unit price × quantity).
+function lineTotal(it) {
+  return (it.price_at_order ?? 0) * (it.quantity ?? 1)
+}
+
+// A pending order with unavailable_items set is waiting on the customer to
+// accept the revised order or cancel it — the restaurant can't accept it yet.
+function isAwaitingCustomer(order) {
+  return (
+    order?.status === 'pending' &&
+    Array.isArray(order.unavailable_items) &&
+    order.unavailable_items.length > 0
+  )
 }
 
 function escapeHtml(value) {
@@ -227,6 +244,7 @@ const CANCEL_REASONS = [
   "We don't deliver to your area",
   'Payment could not be verified',
   'Customer requested cancellation',
+  'Rider cancelled the order',
   'Other',
 ]
 
@@ -345,10 +363,26 @@ export default function Orders() {
   // Selected order details
   const selectedOrder = orders.find(o => o.id === selectedOrderId)
 
-  // Reset checklist when order selection changes
+  // Prime the checklist once per selected order, as soon as its data is
+  // available. Pending orders start with every in-stock item checked (only
+  // items already flagged unavailable stay unchecked) so the manager just
+  // unchecks whatever is out of stock; other statuses start empty (a plain
+  // prepping checklist). The ref guard means realtime reloads of `orders`
+  // don't re-prime the same order and wipe the manager's unchecks.
+  const primedOrderRef = useRef(null)
   useEffect(() => {
-    setCheckedItems(new Set())
-  }, [selectedOrderId])
+    const order = orders.find((o) => o.id === selectedOrderId)
+    if (!order || primedOrderRef.current === selectedOrderId) return
+    primedOrderRef.current = selectedOrderId
+    if (order.status === 'pending') {
+      const unavail = new Set(order.unavailable_items ?? [])
+      setCheckedItems(
+        new Set((order.order_items ?? []).filter((it) => !unavail.has(it.id)).map((it) => it.id))
+      )
+    } else {
+      setCheckedItems(new Set())
+    }
+  }, [selectedOrderId, orders])
 
   const toggleItemCheck = (itemId) => {
     setCheckedItems(prev => {
@@ -414,6 +448,33 @@ export default function Orders() {
     // Select another active order
     const remaining = activeOrders.filter((o) => o.id !== order.id)
     setSelectedOrderId(remaining.length > 0 ? remaining[0].id : null)
+  }
+
+  // On a pending order the kitchen checklist doubles as an availability
+  // selector: checked = in stock, unchecked = out of stock. Sending the order
+  // to the customer persists the unchecked items as unavailable_items plus the
+  // adjusted total, and leaves status 'pending' (on hold) until they respond.
+  const sendToCustomer = async (order) => {
+    const items = order.order_items ?? []
+    const unavailableIds = items
+      .filter((it) => !checkedItems.has(it.id))
+      .map((it) => it.id)
+    if (busy || unavailableIds.length === 0 || unavailableIds.length === items.length) return
+    const removed = items
+      .filter((it) => unavailableIds.includes(it.id))
+      .reduce((s, it) => s + lineTotal(it), 0)
+    const modified = Math.max(0, (order.total ?? 0) - removed)
+    setBusy(order.id)
+    const { error } = await supabase
+      .from('orders')
+      .update({ unavailable_items: unavailableIds, modified_total: modified })
+      .eq('id', order.id)
+    setBusy(null)
+    if (error) {
+      alert(`Could not update order: ${error.message}`)
+      return
+    }
+    patchLocal(order.id, { unavailable_items: unavailableIds, modified_total: modified })
   }
 
   // Count counts for tabs
@@ -594,6 +655,11 @@ export default function Orders() {
                             Unpaid
                           </span>
                         )}
+                        {isAwaitingCustomer(o) && (
+                          <span className="flex items-center gap-1 rounded bg-amber-500 px-1.5 py-0.5 text-[9px] font-bold text-white">
+                            <Hourglass className="h-2.5 w-2.5" /> On hold
+                          </span>
+                        )}
                       </div>
                       <ChevronRight className="h-3.5 w-3.5 text-line-2 transition-transform group-hover:translate-x-1" />
                     </div>
@@ -687,18 +753,29 @@ export default function Orders() {
 
                   {/* Kitchen Checklist Card */}
                   <div className="rounded-xl border border-line bg-white p-5 shadow-sm">
-                    <div className="flex justify-between items-center mb-3">
+                    <div className="flex justify-between items-center mb-1">
                       <h3 className="text-xs font-bold uppercase tracking-wider text-ink-soft">
-                        Kitchen Items Checklist
+                        {selectedOrder.status === 'pending'
+                          ? 'Item Availability'
+                          : 'Kitchen Items Checklist'}
                       </h3>
                       <span className="text-[11px] bg-canvas px-2 py-0.5 rounded-full text-ink-soft font-mono">
-                        {checkedItems.size} / {selectedOrder.order_items?.length} Prepped
+                        {checkedItems.size} / {selectedOrder.order_items?.length}{' '}
+                        {selectedOrder.status === 'pending' ? 'in stock' : 'Prepped'}
                       </span>
                     </div>
+                    {selectedOrder.status === 'pending' && !isAwaitingCustomer(selectedOrder) && (
+                      <p className="mb-3 text-[11px] text-ink-soft">
+                        Uncheck any item that is out of stock, then send the order to the customer to approve or cancel.
+                      </p>
+                    )}
 
                     <div className="divide-y divide-line-soft">
                       {selectedOrder.order_items?.map((it) => {
                         const isChecked = checkedItems.has(it.id)
+                        const isUnavailable =
+                          Array.isArray(selectedOrder.unavailable_items) &&
+                          selectedOrder.unavailable_items.includes(it.id)
                         return (
                           <div
                             key={it.id}
@@ -717,19 +794,36 @@ export default function Orders() {
                                 <img
                                   src={imgFor(it.products?.name, it.products?.photo_url)}
                                   alt=""
-                                  className="h-8 w-8 rounded bg-line-soft object-cover"
+                                  className={`h-8 w-8 rounded bg-line-soft object-cover ${
+                                    isUnavailable ? 'opacity-40 grayscale' : ''
+                                  }`}
                                 />
                                 <div>
                                   <p className={`text-sm font-semibold transition-all ${
-                                    isChecked ? 'text-ink-soft line-through decoration-line-2' : 'text-ink'
+                                    isUnavailable
+                                      ? 'text-red-600 line-through decoration-red-300'
+                                      : isChecked
+                                      ? 'text-ink-soft line-through decoration-line-2'
+                                      : 'text-ink'
                                   }`}>
                                     {it.quantity} × {it.products?.name || 'Item'}
                                   </p>
+                                  {isUnavailable && (
+                                    <span className="mt-0.5 inline-flex items-center gap-1 rounded bg-red-50 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-red-600">
+                                      <PackageX className="h-2.5 w-2.5" /> Unavailable
+                                    </span>
+                                  )}
                                 </div>
                               </div>
                             </div>
-                            <span className={`text-xs font-bold ${isChecked ? 'text-ink-soft' : 'text-ink'}`}>
-                              ₹{(it.price_at_order ?? 0) * (it.quantity ?? 1)}
+                            <span className={`text-xs font-bold ${
+                              isUnavailable
+                                ? 'text-red-400 line-through'
+                                : isChecked
+                                ? 'text-ink-soft'
+                                : 'text-ink'
+                            }`}>
+                              ₹{lineTotal(it)}
                             </span>
                           </div>
                         )
@@ -807,8 +901,16 @@ export default function Orders() {
                       
                       <div className="flex justify-between border-t border-line-soft pt-3 text-sm font-bold">
                         <span className="text-ink">Order Total</span>
-                        <span className="text-brand">₹{selectedOrder.total}</span>
+                        <span className={isAwaitingCustomer(selectedOrder) ? 'text-ink-soft line-through' : 'text-brand'}>
+                          ₹{selectedOrder.total}
+                        </span>
                       </div>
+                      {isAwaitingCustomer(selectedOrder) && selectedOrder.modified_total != null && (
+                        <div className="flex justify-between rounded bg-amber-50 px-2 py-1.5 text-sm font-bold text-[#b45309]">
+                          <span>Revised Total (awaiting)</span>
+                          <span>₹{selectedOrder.modified_total}</span>
+                        </div>
+                      )}
                     </div>
 
                     <div className="border-t border-line-soft pt-3">
@@ -846,14 +948,55 @@ export default function Orders() {
                     </button>
                   )}
 
-                  {NEXT_ACTION[selectedOrder.status] ? (
+                  {isAwaitingCustomer(selectedOrder) ? (
+                    <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-xs font-bold text-[#b45309]">
+                      <Hourglass className="h-4 w-4 animate-pulse" />
+                      Awaiting customer response
+                    </div>
+                  ) : selectedOrder.status === 'pending' ? (
+                    (() => {
+                      const items = selectedOrder.order_items ?? []
+                      const outOfStock = items.filter((it) => !checkedItems.has(it.id)).length
+                      const allOut = outOfStock === items.length && items.length > 0
+                      if (outOfStock > 0) {
+                        return (
+                          <button
+                            type="button"
+                            disabled={busy === selectedOrder.id || allOut}
+                            onClick={() => sendToCustomer(selectedOrder)}
+                            title={allOut ? 'All items are out of stock — cancel the order instead' : undefined}
+                            className="flex items-center gap-1.5 rounded-lg bg-amber-600 px-6 py-2.5 text-xs font-bold text-white shadow-md transition-all hover:bg-amber-700 disabled:opacity-50"
+                          >
+                            <PackageX className="h-4 w-4" />
+                            {allOut
+                              ? 'All items out of stock'
+                              : `Send to Customer (${outOfStock} out of stock)`}
+                          </button>
+                        )
+                      }
+                      return (
+                        <button
+                          type="button"
+                          disabled={busy === selectedOrder.id}
+                          onClick={() => advance(selectedOrder)}
+                          className={`flex items-center gap-1.5 rounded-lg px-6 py-2.5 text-xs font-bold text-white transition-all shadow-md ${NEXT_ACTION.pending.color} disabled:opacity-50`}
+                        >
+                          <ShieldCheck className="h-4 w-4" /> {NEXT_ACTION.pending.label}
+                        </button>
+                      )
+                    })()
+                  ) : NEXT_ACTION[selectedOrder.status] ? (
                     <button
                       type="button"
                       disabled={busy === selectedOrder.id}
                       onClick={() => advance(selectedOrder)}
                       className={`flex items-center gap-1.5 rounded-lg px-6 py-2.5 text-xs font-bold text-white transition-all shadow-md ${
                         NEXT_ACTION[selectedOrder.status].color
-                      } disabled:opacity-50`}
+                      } disabled:opacity-50 ${
+                        // "Mark Ready" is shifted to the far left (Cancel stays far
+                        // right) so it isn't tapped by reflex in the Preparing tab.
+                        selectedOrder.status === 'preparing' ? 'order-first mr-auto' : ''
+                      }`}
                     >
                       {(() => {
                         const Icon = NEXT_ACTION[selectedOrder.status].icon
