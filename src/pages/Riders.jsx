@@ -39,14 +39,24 @@ function toneFor(id = '') {
   return AVATAR_TONES[sum % AVATAR_TONES.length]
 }
 
-function StatusBadge({ onDelivery }) {
-  return onDelivery ? (
-    <span className="inline-flex items-center gap-1.5 rounded-full bg-info-soft px-3 py-1 text-xs font-semibold text-info">
-      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-info" /> On Delivery
-    </span>
-  ) : (
-    <span className="inline-flex items-center gap-1.5 rounded-full bg-pos-soft px-3 py-1 text-xs font-semibold text-pos-dark">
-      <span className="h-1.5 w-1.5 rounded-full bg-pos" /> Available
+function StatusBadge({ onDelivery, locStatus }) {
+  if (onDelivery) {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full bg-info-soft px-3 py-1 text-xs font-semibold text-info">
+        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-info" /> On Delivery
+      </span>
+    )
+  }
+  if (locStatus === 'online') {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full bg-pos-soft px-3 py-1 text-xs font-semibold text-pos-dark">
+        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-pos" /> Online
+      </span>
+    )
+  }
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full bg-line-soft px-3 py-1 text-xs font-semibold text-ink-soft">
+      <span className="h-1.5 w-1.5 rounded-full bg-line-2" /> Offline
     </span>
   )
 }
@@ -77,11 +87,11 @@ export default function Riders() {
     return Promise.all([
       supabase
         .from('orders')
-        .select('id, status, total, created_at, rider_id, rider:profiles!orders_rider_id_fkey(id, full_name, phone)')
+        .select('id, status, total, rider_payment, created_at, rider_id, rider:profiles!orders_rider_id_fkey(id, full_name, phone)')
         .not('rider_id', 'is', null)
         .order('created_at', { ascending: false }),
       supabase.from('profiles').select('id, full_name, phone').eq('role', 'rider'),
-      supabase.from('rider_locations').select('rider_id, latitude, longitude, updated_at'),
+      supabase.from('rider_locations').select('rider_id, latitude, longitude, status, updated_at'),
     ]).then(([ordersRes, rosterRes, locRes]) => {
     if (ordersRes.error) console.error('Failed to load rider orders:', ordersRes.error.message)
 
@@ -89,7 +99,7 @@ export default function Riders() {
     const upsert = (id, name, phone) => {
       if (!id) return null
       if (!map.has(id)) {
-        map.set(id, { id, name: name || 'Rider', phone: phone || null, active: 0, completed: 0, total: 0, earned: 0, lastAt: null, loc: null })
+        map.set(id, { id, name: name || 'Rider', phone: phone || null, active: 0, completed: 0, total: 0, earned: 0, lastAt: null, loc: null, locStatus: null })
       }
       const r = map.get(id)
       if (name && r.name === 'Rider') r.name = name
@@ -106,7 +116,7 @@ export default function Riders() {
       r.total += 1
       if (o.status === 'delivered') {
         r.completed += 1
-        r.earned += o.total || 0
+        r.earned += o.rider_payment || 0
       } else if (o.status === 'out_for_delivery') {
         r.active += 1
       }
@@ -121,6 +131,7 @@ export default function Riders() {
     })
     map.forEach((r) => {
       r.loc = locByRider[r.id] || null
+      r.locStatus = r.loc?.status || null
       const locAt = r.loc?.updated_at
       if (locAt && (!r.lastAt || new Date(locAt) > new Date(r.lastAt))) r.lastAt = locAt
     })
@@ -147,13 +158,13 @@ export default function Riders() {
   }, [load])
 
   const onDelivery = riders.filter((r) => r.active > 0).length
-  const available = riders.length - onDelivery
+  const available = riders.filter((r) => r.active === 0 && r.locStatus === 'online').length
   const totalDeliveries = riders.reduce((s, r) => s + r.completed, 0)
 
   const kpis = [
-    { label: 'TOTAL RIDERS', value: String(riders.length), sub: 'Assigned to orders', icon: Users, iconBg: 'bg-[#ffdad3] text-brand' },
+    { label: 'TOTAL RIDERS', value: String(riders.length), sub: 'All registered riders', icon: Users, iconBg: 'bg-[#ffdad3] text-brand' },
     { label: 'ON DELIVERY', value: String(onDelivery), sub: 'Out for delivery now', icon: Truck, iconBg: 'bg-info-soft text-info' },
-    { label: 'AVAILABLE', value: String(available), sub: 'Not on a delivery', icon: Bike, iconBg: 'bg-pos-soft text-pos-dark' },
+    { label: 'AVAILABLE', value: String(available), sub: 'Online, awaiting orders', icon: Bike, iconBg: 'bg-pos-soft text-pos-dark' },
     { label: 'DELIVERIES', value: String(totalDeliveries), sub: 'Completed all-time', icon: CheckCircle2, iconBg: 'bg-[#fef3c7] text-[#b45309]' },
   ]
 
@@ -234,7 +245,7 @@ export default function Riders() {
                       )}
                     </td>
                     <td className="px-5 py-4">
-                      <StatusBadge onDelivery={r.active > 0} />
+                      <StatusBadge onDelivery={r.active > 0} locStatus={r.locStatus} />
                     </td>
                     <td className="px-5 py-4 text-sm font-semibold text-ink">{r.active}</td>
                     <td className="px-5 py-4 text-sm font-semibold text-ink">{r.completed}</td>

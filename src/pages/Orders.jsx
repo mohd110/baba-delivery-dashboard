@@ -216,7 +216,7 @@ const NEXT_ACTION = {
   preparing: { label: 'Mark Ready', to: 'ready', icon: CheckCircle2, color: 'bg-pos hover:bg-pos-dark' },
 }
 
-const CANCELABLE = new Set(['pending', 'accepted', 'preparing'])
+const CANCELABLE = new Set(['pending', 'accepted', 'preparing', 'ready'])
 
 // Preset cancellation reasons shown to the manager. The chosen text is saved on
 // the order so the customer can see why it was cancelled.
