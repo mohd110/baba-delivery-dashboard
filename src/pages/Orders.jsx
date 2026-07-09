@@ -64,19 +64,25 @@ function isAwaitingCustomer(order) {
 
 // Fire-and-forget push notification to the customer app. Failures are
 // logged but never block the order-status update they follow.
-function notifyCustomer(order, { title, body }) {
+async function notifyCustomer(order, { title, body }) {
   if (!order?.customer_id) return
-  fetch('https://local-delivery-app-zeta.vercel.app/api/push/send', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      customerId: order.customer_id,
-      title,
-      body,
-      url: `/orders/${order.id}`,
-      tag: 'order-update',
-    }),
-  }).catch((err) => console.error('Push notification failed:', err))
+  try {
+    const res = await fetch('https://local-delivery-app-zeta.vercel.app/api/push/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        customerId: order.customer_id,
+        title,
+        body,
+        url: `/orders/${order.id}`,
+        tag: 'order-update',
+      }),
+    })
+    const data = await res.json()
+    console.log('[Push result]', data)
+  } catch (err) {
+    console.error('Push notification failed:', err)
+  }
 }
 
 function escapeHtml(value) {
@@ -512,6 +518,36 @@ export default function Orders() {
     notifyCustomer(order, { title: '⚠️ Order Update', body: 'Some items are unavailable. Tap to review your order.' })
   }
 
+  // Manual test button so push notifications can be verified without
+  // creating/advancing a real order. Prompts for a customerId (prefilled
+  // with the selected order's, if any) and logs the raw API response.
+  const sendTestNotification = async () => {
+    const customerId = window.prompt(
+      'Customer ID (UUID) to send a test push to:',
+      selectedOrder?.customer_id || ''
+    )
+    if (!customerId) return
+    try {
+      const res = await fetch('https://local-delivery-app-zeta.vercel.app/api/push/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customerId,
+          title: '🔔 Test Notification',
+          body: 'This is a test push from the dashboard.',
+          url: '/orders',
+          tag: 'order-update',
+        }),
+      })
+      const data = await res.json()
+      console.log('[Push result]', data)
+      alert(`Push response (status ${res.status}):\n${JSON.stringify(data, null, 2)}`)
+    } catch (err) {
+      console.error('Push notification failed:', err)
+      alert(`Push request failed: ${err.message}`)
+    }
+  }
+
   // Count counts for tabs
   const pendingCount = activeOrders.filter(o => getTabForOrder(o) === 'pending').length
   const preparingCount = activeOrders.filter(o => getTabForOrder(o) === 'preparing').length
@@ -528,6 +564,13 @@ export default function Orders() {
           </span>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={sendTestNotification}
+            className="flex items-center gap-1.5 rounded-lg border border-line px-3 py-1.5 text-xs font-semibold text-ink-soft hover:bg-canvas"
+          >
+            Test Push
+          </button>
           <TopIcons />
         </div>
       </Topbar>
