@@ -62,6 +62,23 @@ function isAwaitingCustomer(order) {
   )
 }
 
+// Fire-and-forget push notification to the customer app. Failures are
+// logged but never block the order-status update they follow.
+function notifyCustomer(order, { title, body }) {
+  if (!order?.customer_id) return
+  fetch('https://local-delivery-app-zeta.vercel.app/api/push/send', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      customerId: order.customer_id,
+      title,
+      body,
+      url: `/orders/${order.id}`,
+      tag: 'order-update',
+    }),
+  }).catch((err) => console.error('Push notification failed:', err))
+}
+
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"]/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])
@@ -414,6 +431,11 @@ export default function Orders() {
       return
     }
     patchLocal(order.id, patch)
+    if (action.to === 'preparing') {
+      notifyCustomer(order, { title: '👨‍🍳 Order Confirmed!', body: 'Your order is being prepared.' })
+    } else if (action.to === 'ready') {
+      notifyCustomer(order, { title: '📦 Order Ready!', body: 'Your order is ready for pickup.' })
+    }
     // Automatically navigate to the tab matching the new status so the
     // manager can immediately see the order in its new home.
     if (action.to === 'preparing') {
@@ -455,6 +477,7 @@ export default function Orders() {
       return
     }
     patchLocal(order.id, { status: 'cancelled', cancellation_reason: reason })
+    notifyCustomer(order, { title: '❌ Order Cancelled', body: 'Your order was cancelled by the restaurant.' })
     setCancelTarget(null)
     // Select another active order
     const remaining = activeOrders.filter((o) => o.id !== order.id)
@@ -486,6 +509,7 @@ export default function Orders() {
       return
     }
     patchLocal(order.id, { unavailable_items: unavailableIds, modified_total: modified })
+    notifyCustomer(order, { title: '⚠️ Order Update', body: 'Some items are unavailable. Tap to review your order.' })
   }
 
   // Count counts for tabs
