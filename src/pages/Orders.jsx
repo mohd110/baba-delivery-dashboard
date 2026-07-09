@@ -228,8 +228,8 @@ const STATUS = {
 }
 
 const NEXT_ACTION = {
-  pending: { label: 'Accept & Verify Payment', to: 'accepted', verifyPayment: true, icon: ShieldCheck, color: 'bg-amber-600 hover:bg-amber-700' },
-  accepted: { label: 'Start Preparing', to: 'preparing', icon: ChefHat, color: 'bg-brand hover:bg-brand-dark' },
+  // Accept jumps straight to 'preparing' — no intermediate 'accepted' step.
+  pending: { label: 'Accept Order', to: 'preparing', verifyPayment: true, icon: ShieldCheck, color: 'bg-brand hover:bg-brand-dark' },
   preparing: { label: 'Mark Ready', to: 'ready', icon: CheckCircle2, color: 'bg-pos hover:bg-pos-dark' },
 }
 
@@ -327,6 +327,7 @@ export default function Orders() {
   // Get active tab assignment for each order
   const getTabForOrder = (order) => {
     if (order.status === 'pending') return 'pending'
+    // 'accepted' is kept as a safety net (shouldn't appear normally after the flow change)
     if (['accepted', 'preparing'].includes(order.status)) return 'preparing'
     if (['ready', 'out_for_delivery'].includes(order.status)) return 'ready'
     return 'completed' // For delivered/cancelled
@@ -360,8 +361,9 @@ export default function Orders() {
     return customerName.includes(q) || orderId.includes(q) || items.includes(q)
   })
 
-  // Selected order details
-  const selectedOrder = orders.find(o => o.id === selectedOrderId)
+  // Selected order details — only within the current tab so the right panel
+  // clears automatically when you switch to a tab that doesn't contain it.
+  const selectedOrder = filteredOrders.find(o => o.id === selectedOrderId)
 
   // Prime the checklist once per selected order, as soon as its data is
   // available. Pending orders start with every in-stock item checked (only
@@ -412,6 +414,15 @@ export default function Orders() {
       return
     }
     patchLocal(order.id, patch)
+    // Automatically navigate to the tab matching the new status so the
+    // manager can immediately see the order in its new home.
+    if (action.to === 'preparing') {
+      setActiveTab('preparing')
+      setSelectedOrderId(order.id)
+    } else if (action.to === 'ready') {
+      setActiveTab('ready')
+      setSelectedOrderId(order.id)
+    }
   }
 
   // Open the cancellation dialog for an order (resets the reason picker).
@@ -522,6 +533,7 @@ export default function Orders() {
                 setActiveTab('pending')
                 const tabOrders = activeOrders.filter(o => getTabForOrder(o) === 'pending')
                 if (tabOrders.length > 0) setSelectedOrderId(tabOrders[0].id)
+                else setSelectedOrderId(null)
               }}
               className={`flex flex-col items-center gap-1 rounded-md py-2.5 transition-colors relative ${
                 activeTab === 'pending'
@@ -544,6 +556,7 @@ export default function Orders() {
                 setActiveTab('preparing')
                 const tabOrders = activeOrders.filter(o => getTabForOrder(o) === 'preparing')
                 if (tabOrders.length > 0) setSelectedOrderId(tabOrders[0].id)
+                else setSelectedOrderId(null)
               }}
               className={`flex flex-col items-center gap-1 rounded-md py-2.5 transition-colors ${
                 activeTab === 'preparing'
@@ -566,6 +579,7 @@ export default function Orders() {
                 setActiveTab('ready')
                 const tabOrders = activeOrders.filter(o => getTabForOrder(o) === 'ready')
                 if (tabOrders.length > 0) setSelectedOrderId(tabOrders[0].id)
+                else setSelectedOrderId(null)
               }}
               className={`flex flex-col items-center gap-1 rounded-md py-2.5 transition-colors ${
                 activeTab === 'ready'
@@ -661,7 +675,19 @@ export default function Orders() {
                           </span>
                         )}
                       </div>
-                      <ChevronRight className="h-3.5 w-3.5 text-line-2 transition-transform group-hover:translate-x-1" />
+                      {/* Inline Mark Ready button shown directly on preparing-tab cards */}
+                      {activeTab === 'preparing' && o.status === 'preparing' ? (
+                        <button
+                          type="button"
+                          disabled={busy === o.id}
+                          onClick={(e) => { e.stopPropagation(); advance(o) }}
+                          className="flex items-center gap-1 rounded-lg bg-pos px-2.5 py-1 text-[10px] font-bold text-white shadow-sm hover:bg-pos-dark transition-colors disabled:opacity-50"
+                        >
+                          <CheckCircle2 className="h-3 w-3" /> Mark Ready
+                        </button>
+                      ) : (
+                        <ChevronRight className="h-3.5 w-3.5 text-line-2 transition-transform group-hover:translate-x-1" />
+                      )}
                     </div>
                   </div>
                 )
@@ -974,6 +1000,7 @@ export default function Orders() {
                           </button>
                         )
                       }
+                      // All items in stock → Accept immediately jumps to 'preparing'
                       return (
                         <button
                           type="button"
@@ -985,6 +1012,10 @@ export default function Orders() {
                         </button>
                       )
                     })()
+                  ) : selectedOrder.status === 'preparing' ? (
+                    // Mark Ready is handled by the inline button on the order card.
+                    // Nothing extra needed in the footer for preparing orders.
+                    null
                   ) : NEXT_ACTION[selectedOrder.status] ? (
                     <button
                       type="button"
@@ -992,11 +1023,7 @@ export default function Orders() {
                       onClick={() => advance(selectedOrder)}
                       className={`flex items-center gap-1.5 rounded-lg px-6 py-2.5 text-xs font-bold text-white transition-all shadow-md ${
                         NEXT_ACTION[selectedOrder.status].color
-                      } disabled:opacity-50 ${
-                        // "Mark Ready" is shifted to the far left (Cancel stays far
-                        // right) so it isn't tapped by reflex in the Preparing tab.
-                        selectedOrder.status === 'preparing' ? 'order-first mr-auto' : ''
-                      }`}
+                      } disabled:opacity-50`}
                     >
                       {(() => {
                         const Icon = NEXT_ACTION[selectedOrder.status].icon
