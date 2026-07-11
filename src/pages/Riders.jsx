@@ -10,6 +10,8 @@ import {
 } from 'lucide-react'
 import Topbar, { SearchBox, TopIcons } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
+import DateRangeFilter from '../components/DateRangeFilter.jsx'
+import { inRange, rangeLabel } from '../lib/dateRange.js'
 
 function initials(name = '') {
   const parts = name.split(' ').filter(Boolean).slice(0, 2)
@@ -76,9 +78,64 @@ function Kpi({ label, value, sub, icon: Icon, iconBg }) {
   )
 }
 
+// Aggregate the rider roster from orders (already filtered to a date range) +
+// the full profile roster + latest live locations.
+function buildRiders(orders, roster, locs) {
+  const map = new Map()
+  const upsert = (id, name, phone) => {
+    if (!id) return null
+    if (!map.has(id)) {
+      map.set(id, { id, name: name || 'Rider', phone: phone || null, active: 0, completed: 0, total: 0, earned: 0, lastAt: null, loc: null, locStatus: null })
+    }
+    const r = map.get(id)
+    if (name && r.name === 'Rider') r.name = name
+    if (phone && !r.phone) r.phone = phone
+    return r
+  }
+
+  // Seed with the full roster first so idle riders still show up.
+  ;(roster ?? []).forEach((p) => upsert(p.id, p.full_name, p.phone))
+
+  ;(orders ?? []).forEach((o) => {
+    const r = upsert(o.rider_id || o.rider?.id, o.rider?.full_name, o.rider?.phone)
+    if (!r) return
+    r.total += 1
+    if (o.status === 'delivered') {
+      r.completed += 1
+      r.earned += o.rider_payment || 0
+    } else if (o.status === 'out_for_delivery') {
+      r.active += 1
+    }
+    if (!r.lastAt || new Date(o.created_at) > new Date(r.lastAt)) r.lastAt = o.created_at
+  })
+
+  // Newest location per rider.
+  const locByRider = {}
+  ;(locs ?? []).forEach((l) => {
+    const cur = locByRider[l.rider_id]
+    if (!cur || new Date(l.updated_at) > new Date(cur.updated_at)) locByRider[l.rider_id] = l
+  })
+  map.forEach((r) => {
+    r.loc = locByRider[r.id] || null
+    r.locStatus = r.loc?.status || null
+    const locAt = r.loc?.updated_at
+    if (locAt && (!r.lastAt || new Date(locAt) > new Date(r.lastAt))) r.lastAt = locAt
+  })
+
+  return [...map.values()].sort((a, b) => {
+    if (b.active !== a.active) return b.active - a.active
+    return new Date(b.lastAt || 0) - new Date(a.lastAt || 0)
+  })
+}
+
 export default function Riders() {
-  const [riders, setRiders] = useState([])
+  const [ordersData, setOrdersData] = useState([])
+  const [roster, setRoster] = useState([])
+  const [locs, setLocs] = useState([])
   const [loading, setLoading] = useState(true)
+  const [range, setRange] = useState(null)
+  const [preset, setPreset] = useState('month')
+  const [searchQuery, setSearchQuery] = useState('')
 
   const load = useCallback(() => {
     // Orders with a rider assigned are always readable by the restaurant via the
@@ -93,54 +150,10 @@ export default function Riders() {
       supabase.from('profiles').select('id, full_name, phone').eq('role', 'rider'),
       supabase.from('rider_locations').select('rider_id, latitude, longitude, status, updated_at'),
     ]).then(([ordersRes, rosterRes, locRes]) => {
-    if (ordersRes.error) console.error('Failed to load rider orders:', ordersRes.error.message)
-
-    const map = new Map()
-    const upsert = (id, name, phone) => {
-      if (!id) return null
-      if (!map.has(id)) {
-        map.set(id, { id, name: name || 'Rider', phone: phone || null, active: 0, completed: 0, total: 0, earned: 0, lastAt: null, loc: null, locStatus: null })
-      }
-      const r = map.get(id)
-      if (name && r.name === 'Rider') r.name = name
-      if (phone && !r.phone) r.phone = phone
-      return r
-    }
-
-    // Seed with the full roster first so idle riders still show up.
-    ;(rosterRes.data ?? []).forEach((p) => upsert(p.id, p.full_name, p.phone))
-
-    ;(ordersRes.data ?? []).forEach((o) => {
-      const r = upsert(o.rider_id || o.rider?.id, o.rider?.full_name, o.rider?.phone)
-      if (!r) return
-      r.total += 1
-      if (o.status === 'delivered') {
-        r.completed += 1
-        r.earned += o.rider_payment || 0
-      } else if (o.status === 'out_for_delivery') {
-        r.active += 1
-      }
-      if (!r.lastAt || new Date(o.created_at) > new Date(r.lastAt)) r.lastAt = o.created_at
-    })
-
-    // Newest location per rider.
-    const locByRider = {}
-    ;(locRes.data ?? []).forEach((l) => {
-      const cur = locByRider[l.rider_id]
-      if (!cur || new Date(l.updated_at) > new Date(cur.updated_at)) locByRider[l.rider_id] = l
-    })
-    map.forEach((r) => {
-      r.loc = locByRider[r.id] || null
-      r.locStatus = r.loc?.status || null
-      const locAt = r.loc?.updated_at
-      if (locAt && (!r.lastAt || new Date(locAt) > new Date(r.lastAt))) r.lastAt = locAt
-    })
-
-    const list = [...map.values()].sort((a, b) => {
-      if (b.active !== a.active) return b.active - a.active
-      return new Date(b.lastAt || 0) - new Date(a.lastAt || 0)
-    })
-      setRiders(list)
+      if (ordersRes.error) console.error('Failed to load rider orders:', ordersRes.error.message)
+      setOrdersData(ordersRes.data ?? [])
+      setRoster(rosterRes.data ?? [])
+      setLocs(locRes.data ?? [])
       setLoading(false)
     })
   }, [])
@@ -157,15 +170,22 @@ export default function Riders() {
     }
   }, [load])
 
+  const riders = buildRiders(ordersData.filter((o) => inRange(o.created_at, range)), roster, locs)
+  const q = searchQuery.trim().toLowerCase()
+  const visibleRiders = q
+    ? riders.filter((r) => r.name.toLowerCase().includes(q) || (r.phone || '').toLowerCase().includes(q))
+    : riders
+
   const onDelivery = riders.filter((r) => r.active > 0).length
   const available = riders.filter((r) => r.active === 0 && r.locStatus === 'online').length
   const totalDeliveries = riders.reduce((s, r) => s + r.completed, 0)
 
+  const label = rangeLabel(preset, range)
   const kpis = [
     { label: 'TOTAL RIDERS', value: String(riders.length), sub: 'All registered riders', icon: Users, iconBg: 'bg-[#ffdad3] text-brand' },
     { label: 'ON DELIVERY', value: String(onDelivery), sub: 'Out for delivery now', icon: Truck, iconBg: 'bg-info-soft text-info' },
     { label: 'AVAILABLE', value: String(available), sub: 'Online, awaiting orders', icon: Bike, iconBg: 'bg-pos-soft text-pos-dark' },
-    { label: 'DELIVERIES', value: String(totalDeliveries), sub: 'Completed all-time', icon: CheckCircle2, iconBg: 'bg-[#fef3c7] text-[#b45309]' },
+    { label: 'DELIVERIES', value: String(totalDeliveries), sub: `Completed · ${label}`, icon: CheckCircle2, iconBg: 'bg-[#fef3c7] text-[#b45309]' },
   ]
 
   return (
@@ -178,12 +198,24 @@ export default function Riders() {
           </span>
         </div>
         <div className="flex items-center gap-2">
-          <SearchBox placeholder="Search riders..." className="w-[260px]" />
+          <SearchBox
+            placeholder="Search riders..."
+            className="w-[260px]"
+            value={searchQuery}
+            onChange={setSearchQuery}
+          />
           <TopIcons />
         </div>
       </Topbar>
 
       <div className="space-y-6 p-8">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm text-ink-soft">
+            Rider performance for <span className="font-semibold text-ink">{label}</span>
+          </p>
+          <DateRangeFilter defaultPreset="month" onChange={(r, p) => { setRange(r); setPreset(p) }} />
+        </div>
+
         <div className="grid grid-cols-4 gap-6">
           {kpis.map((k) => (
             <Kpi key={k.label} {...k} />
@@ -194,7 +226,7 @@ export default function Riders() {
           <div className="flex items-center justify-between p-5">
             <h2 className="text-lg font-bold text-ink">Riders</h2>
             <span className="text-sm text-ink-soft">
-              {loading ? 'Loading…' : `${riders.length} rider${riders.length === 1 ? '' : 's'}`}
+              {loading ? 'Loading…' : `${visibleRiders.length} rider${visibleRiders.length === 1 ? '' : 's'}`}
             </span>
           </div>
 
@@ -215,14 +247,16 @@ export default function Riders() {
                 <tr>
                   <td colSpan={7} className="px-5 py-12 text-center text-sm text-ink-soft">Loading riders…</td>
                 </tr>
-              ) : riders.length === 0 ? (
+              ) : visibleRiders.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="px-5 py-12 text-center text-sm text-ink-soft">
-                    No riders yet — they appear here once a rider claims a ready order in the rider app.
+                    {q
+                      ? 'No riders match your search.'
+                      : 'No riders yet — they appear here once a rider claims a ready order in the rider app.'}
                   </td>
                 </tr>
               ) : (
-                riders.map((r) => (
+                visibleRiders.map((r) => (
                   <tr key={r.id}>
                     <td className="px-5 py-4">
                       <div className="flex items-center gap-3">

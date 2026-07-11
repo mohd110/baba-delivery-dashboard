@@ -9,6 +9,8 @@ import {
 } from 'lucide-react'
 import Topbar, { SearchBox, TopIcons } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
+import DateRangeFilter from '../components/DateRangeFilter.jsx'
+import { inRange, rangeLabel } from '../lib/dateRange.js'
 
 function initials(name = '') {
   const parts = name.split(' ').filter(Boolean).slice(0, 2)
@@ -87,8 +89,11 @@ function buildCustomers(orders) {
 }
 
 export default function Customers() {
-  const [customers, setCustomers] = useState([])
+  const [orders, setOrders] = useState([])
   const [loading, setLoading] = useState(true)
+  const [range, setRange] = useState(null)
+  const [preset, setPreset] = useState('month')
+  const [searchQuery, setSearchQuery] = useState('')
 
   const load = useCallback(() => {
     return supabase
@@ -97,7 +102,7 @@ export default function Customers() {
       .order('created_at', { ascending: false })
       .then(({ data, error }) => {
         if (error) console.error('Failed to load customers:', error.message)
-        setCustomers(buildCustomers(data ?? []))
+        setOrders(data ?? [])
         setLoading(false)
       })
   }, [])
@@ -113,13 +118,24 @@ export default function Customers() {
     }
   }, [load])
 
+  // Aggregate customers from only the orders inside the selected range, then
+  // apply the free-text search for display.
+  const customers = buildCustomers(orders.filter((o) => inRange(o.created_at, range)))
+  const q = searchQuery.trim().toLowerCase()
+  const visibleCustomers = q
+    ? customers.filter(
+        (c) => c.name.toLowerCase().includes(q) || (c.phone || '').toLowerCase().includes(q)
+      )
+    : customers
+
   const totalRevenue = customers.reduce((s, c) => s + c.spent, 0)
   const repeat = customers.filter((c) => c.orders > 1).length
   const totalOrders = customers.reduce((s, c) => s + c.orders, 0)
   const avgOrder = totalOrders ? Math.round(totalRevenue / totalOrders) : 0
 
+  const label = rangeLabel(preset, range)
   const kpis = [
-    { label: 'TOTAL CUSTOMERS', value: String(customers.length), sub: 'All-time', icon: Users, iconBg: 'bg-[#ffdad3] text-brand' },
+    { label: 'TOTAL CUSTOMERS', value: String(customers.length), sub: label, icon: Users, iconBg: 'bg-[#ffdad3] text-brand' },
     { label: 'REPEAT CUSTOMERS', value: String(repeat), sub: 'More than one order', icon: Repeat, iconBg: 'bg-info-soft text-info' },
     { label: 'AVG. ORDER VALUE', value: `₹${avgOrder.toLocaleString('en-IN')}`, sub: 'Per delivered order', icon: ShoppingBag, iconBg: 'bg-pos-soft text-pos-dark' },
     { label: 'TOTAL REVENUE', value: `₹${totalRevenue.toLocaleString('en-IN')}`, sub: 'From all customers', icon: IndianRupee, iconBg: 'bg-[#fef3c7] text-[#b45309]' },
@@ -135,12 +151,24 @@ export default function Customers() {
           </span>
         </div>
         <div className="flex items-center gap-2">
-          <SearchBox placeholder="Search customers..." className="w-[260px]" />
+          <SearchBox
+            placeholder="Search customers..."
+            className="w-[260px]"
+            value={searchQuery}
+            onChange={setSearchQuery}
+          />
           <TopIcons />
         </div>
       </Topbar>
 
       <div className="space-y-6 p-8">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm text-ink-soft">
+            Showing customers for <span className="font-semibold text-ink">{label}</span>
+          </p>
+          <DateRangeFilter defaultPreset="month" onChange={(r, p) => { setRange(r); setPreset(p) }} />
+        </div>
+
         <div className="grid grid-cols-4 gap-6">
           {kpis.map((k) => (
             <Kpi key={k.label} {...k} />
@@ -151,7 +179,7 @@ export default function Customers() {
           <div className="flex items-center justify-between p-5">
             <h2 className="text-lg font-bold text-ink">Customers</h2>
             <span className="text-sm text-ink-soft">
-              {loading ? 'Loading…' : `${customers.length} customer${customers.length === 1 ? '' : 's'}`}
+              {loading ? 'Loading…' : `${visibleCustomers.length} customer${visibleCustomers.length === 1 ? '' : 's'}`}
             </span>
           </div>
 
@@ -171,14 +199,16 @@ export default function Customers() {
                 <tr>
                   <td colSpan={6} className="px-5 py-12 text-center text-sm text-ink-soft">Loading customers…</td>
                 </tr>
-              ) : customers.length === 0 ? (
+              ) : visibleCustomers.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="px-5 py-12 text-center text-sm text-ink-soft">
-                    No customers yet — they appear here once orders start coming in.
+                    {q
+                      ? 'No customers match your search.'
+                      : 'No customers in this period — try a wider date range.'}
                   </td>
                 </tr>
               ) : (
-                customers.map((c, i) => (
+                visibleCustomers.map((c, i) => (
                   <tr key={c.key}>
                     <td className="px-5 py-4">
                       <div className="flex items-center gap-3">

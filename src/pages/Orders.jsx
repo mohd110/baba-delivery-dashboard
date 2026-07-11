@@ -17,8 +17,6 @@ import {
   Search,
   Check,
   Clock,
-  ChevronRight,
-  TrendingUp,
   X,
   PackageX,
   Hourglass,
@@ -700,11 +698,13 @@ export default function Orders() {
                         : 'border-l-4 border-transparent'
                     }`}
                   >
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm font-bold text-ink group-hover:text-brand transition-colors">
-                        {shortId}
+                    {/* Order ID (number) + elapsed time */}
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="flex min-w-0 items-center gap-1.5 text-sm font-bold text-ink group-hover:text-brand transition-colors">
+                        <Hash className="h-3.5 w-3.5 shrink-0 text-ink-soft" />
+                        <span className="truncate">{shortId}</span>
                       </span>
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex shrink-0 items-center gap-1.5">
                         <Clock className={`h-3 w-3 ${isLate ? 'text-brand animate-pulse' : 'text-ink-soft'}`} />
                         <span className={`text-xs font-semibold ${isLate ? 'text-brand font-bold' : 'text-ink-soft'}`}>
                           {elapsedMin}
@@ -712,22 +712,39 @@ export default function Orders() {
                       </div>
                     </div>
 
-                    <div className="flex justify-between items-start">
-                      <div>
-                        <p className="text-xs font-semibold text-ink">
-                          {o.delivery_address?.name || 'Customer'}
-                        </p>
-                        <p className="mt-1 text-xs text-ink-soft truncate max-w-[240px]">
-                          {items.map((it) => `${it.quantity}x ${it.products?.name}`).join(', ')}
-                        </p>
-                      </div>
-                      <span className="text-xs font-bold text-ink">
-                        ₹{o.total}
+                    {/* Contact number */}
+                    <div className="flex items-baseline gap-2 text-xs">
+                      <span className="w-11 shrink-0 text-[9px] font-bold uppercase tracking-wide text-ink-soft">
+                        Number
+                      </span>
+                      <span className="min-w-0 flex-1 truncate font-semibold text-ink">
+                        {o.delivery_address?.phone || '—'}
                       </span>
                     </div>
 
-                    <div className="mt-1 flex items-center justify-between">
-                      <div className="flex items-center gap-1">
+                    {/* Customer name */}
+                    <div className="flex items-baseline gap-2 text-xs">
+                      <span className="w-11 shrink-0 text-[9px] font-bold uppercase tracking-wide text-ink-soft">
+                        Name
+                      </span>
+                      <span className="min-w-0 flex-1 truncate font-semibold text-ink">
+                        {o.delivery_address?.name || 'Customer'}
+                      </span>
+                    </div>
+
+                    {/* Items */}
+                    <div className="flex items-baseline gap-2 text-xs">
+                      <span className="w-11 shrink-0 text-[9px] font-bold uppercase tracking-wide text-ink-soft">
+                        Items
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-ink-soft">
+                        {items.map((it) => `${it.quantity}× ${it.products?.name || 'Item'}`).join(', ')}
+                      </span>
+                    </div>
+
+                    {/* Tags + order total */}
+                    <div className="mt-1 flex items-center justify-between gap-2">
+                      <div className="flex flex-wrap items-center gap-1">
                         <span className="rounded bg-line-soft px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-ink-soft">
                           {o.order_type || 'delivery'}
                         </span>
@@ -742,19 +759,20 @@ export default function Orders() {
                           </span>
                         )}
                       </div>
-                      {/* Inline Mark Ready button shown directly on preparing-tab cards */}
-                      {activeTab === 'preparing' && o.status === 'preparing' ? (
-                        <button
-                          type="button"
-                          disabled={busy === o.id}
-                          onClick={(e) => { e.stopPropagation(); advance(o) }}
-                          className="flex items-center gap-1 rounded-lg bg-pos px-2.5 py-1 text-[10px] font-bold text-white shadow-sm hover:bg-pos-dark transition-colors disabled:opacity-50"
-                        >
-                          <CheckCircle2 className="h-3 w-3" /> Mark Ready
-                        </button>
-                      ) : (
-                        <ChevronRight className="h-3.5 w-3.5 text-line-2 transition-transform group-hover:translate-x-1" />
-                      )}
+                      <div className="flex shrink-0 items-center gap-2">
+                        {/* Inline Mark Ready button shown directly on preparing-tab cards */}
+                        {activeTab === 'preparing' && o.status === 'preparing' && (
+                          <button
+                            type="button"
+                            disabled={busy === o.id}
+                            onClick={(e) => { e.stopPropagation(); advance(o) }}
+                            className="flex items-center gap-1 rounded-lg bg-pos px-2.5 py-1 text-[10px] font-bold text-white shadow-sm hover:bg-pos-dark transition-colors disabled:opacity-50"
+                          >
+                            <CheckCircle2 className="h-3 w-3" /> Mark Ready
+                          </button>
+                        )}
+                        <span className="text-sm font-bold text-ink">₹{o.total}</span>
+                      </div>
                     </div>
                   </div>
                 )

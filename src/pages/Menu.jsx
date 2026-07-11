@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   Plus,
-  SlidersHorizontal,
+  LayoutGrid,
   CookingPot,
   Beef,
   IceCream,
@@ -10,15 +10,19 @@ import {
   CheckCircle2,
   AlertTriangle,
   XCircle,
+  X,
 } from 'lucide-react'
 import Topbar, { SearchBox, TopIcons, Divider, ProfileChip } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
 
+// Category tabs actually filter the table. Each tab matches a dish by keywords
+// in its name; "All" shows everything so nothing is ever hidden.
 const tabs = [
-  { label: 'Biryani', icon: CookingPot },
-  { label: 'Kebabs', icon: Beef },
-  { label: 'Desserts', icon: IceCream },
-  { label: 'Beverages', icon: CupSoda },
+  { label: 'All', icon: LayoutGrid, match: () => true },
+  { label: 'Biryani', icon: CookingPot, match: (n) => /biryani|rice|pulao/.test(n) },
+  { label: 'Kebabs', icon: Beef, match: (n) => /kebab|tikka|galouti|seekh|chicken|mutton|korma|curry|butter|paneer|masala|beef/.test(n) },
+  { label: 'Desserts', icon: IceCream, match: (n) => /brownie|tukda|kheer|dessert|gulab|halwa|ice ?cream|firni|phirni/.test(n) },
+  { label: 'Beverages', icon: CupSoda, match: (n) => /coffee|lassi|drink|juice|soda|tea|water|shake|cola|mojito/.test(n) },
 ]
 
 /* map a product name to one of our brand dish photos */
@@ -65,10 +69,15 @@ function Toggle({ on, onChange, disabled }) {
 }
 
 export default function Menu() {
-  const [active, setActive] = useState('Biryani')
+  const [active, setActive] = useState('All')
   const [products, setProducts] = useState([])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(() => new Set())
+  const [searchQuery, setSearchQuery] = useState('')
+  const [restaurantId, setRestaurantId] = useState(null)
+  const [showAdd, setShowAdd] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [form, setForm] = useState({ name: '', price: '', description: '' })
 
   const load = useCallback(
     () =>
@@ -95,6 +104,40 @@ export default function Menu() {
       supabase.removeChannel(channel)
     }
   }, [load])
+
+  // Grab a restaurant id so newly-added dishes attach to the outlet.
+  useEffect(() => {
+    supabase
+      .from('restaurants')
+      .select('id')
+      .limit(1)
+      .then(({ data }) => {
+        if (data && data[0]) setRestaurantId(data[0].id)
+      })
+  }, [])
+
+  // Create a new dish in the products table.
+  const addDish = async (e) => {
+    e.preventDefault()
+    const name = form.name.trim()
+    const price = Number(form.price)
+    if (!name || !Number.isFinite(price) || price <= 0) {
+      alert('Enter a dish name and a price greater than 0.')
+      return
+    }
+    setSaving(true)
+    const row = { name, price, description: form.description.trim() || null, is_available: true }
+    if (restaurantId) row.restaurant_id = restaurantId
+    const { error } = await supabase.from('products').insert(row)
+    setSaving(false)
+    if (error) {
+      alert(`Could not add dish: ${error.message}`)
+      return
+    }
+    setShowAdd(false)
+    setForm({ name: '', price: '', description: '' })
+    load()
+  }
 
   // Flip one dish's availability with an optimistic update; roll back on failure.
   const setAvailability = async (id, next) => {
@@ -131,6 +174,20 @@ export default function Menu() {
     setBulkBusy(false)
   }
 
+  // Table respects the active category tab + the search box.
+  const activeTab = tabs.find((t) => t.label === active) ?? tabs[0]
+  const q = searchQuery.trim().toLowerCase()
+  const visibleProducts = products.filter((p) => {
+    const n = (p.name || '').toLowerCase()
+    if (!activeTab.match(n)) return false
+    if (!q) return true
+    return (
+      n.includes(q) ||
+      (p.description || '').toLowerCase().includes(q) ||
+      categoryFor(p.name).toLowerCase().includes(q)
+    )
+  })
+
   const inStock = products.filter((p) => p.is_available).length
   const soldOut = products.filter((p) => !p.is_available).length
   const pad = (n) => String(n).padStart(2, '0')
@@ -155,7 +212,12 @@ export default function Menu() {
   return (
     <>
       <Topbar>
-        <SearchBox placeholder="Search dishes, prices, or categories..." className="w-full max-w-[420px]" />
+        <SearchBox
+          placeholder="Search dishes, prices, or categories..."
+          className="w-full max-w-[420px]"
+          value={searchQuery}
+          onChange={setSearchQuery}
+        />
         <div className="flex items-center gap-1">
           <TopIcons />
           <Divider />
@@ -172,7 +234,10 @@ export default function Menu() {
               Organize your culinary offerings, update pricing, and manage availability in real-time.
             </p>
           </div>
-          <button className="flex items-center gap-2 rounded-lg bg-brand px-4 py-2.5 text-sm font-semibold uppercase tracking-wide text-white hover:bg-brand-dark">
+          <button
+            onClick={() => setShowAdd(true)}
+            className="flex items-center gap-2 rounded-lg bg-brand px-4 py-2.5 text-sm font-semibold uppercase tracking-wide text-white hover:bg-brand-dark"
+          >
             <Plus className="h-4 w-4" /> Add New Dish
           </button>
         </div>
@@ -199,9 +264,6 @@ export default function Menu() {
                 )
               })}
             </div>
-            <button className="text-ink-soft">
-              <SlidersHorizontal className="h-4 w-4" />
-            </button>
           </div>
 
           {/* table */}
@@ -213,24 +275,23 @@ export default function Menu() {
                 <th className="px-5 py-3 font-semibold">Price</th>
                 <th className="px-5 py-3 font-semibold">Status</th>
                 <th className="px-5 py-3 font-semibold">Availability</th>
-                <th className="px-5 py-3 text-right font-semibold">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-line-soft">
               {loading ? (
                 <tr>
-                  <td colSpan={6} className="px-5 py-12 text-center text-sm text-ink-soft">
+                  <td colSpan={5} className="px-5 py-12 text-center text-sm text-ink-soft">
                     Loading dishes…
                   </td>
                 </tr>
-              ) : products.length === 0 ? (
+              ) : visibleProducts.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-5 py-12 text-center text-sm text-ink-soft">
-                    No dishes found.
+                  <td colSpan={5} className="px-5 py-12 text-center text-sm text-ink-soft">
+                    {q || active !== 'All' ? 'No dishes match this filter.' : 'No dishes found.'}
                   </td>
                 </tr>
               ) : (
-                products.map((p) => (
+                visibleProducts.map((p) => (
                   <tr key={p.id}>
                     <td className="px-5 py-4">
                       <div className="flex items-center gap-3">
@@ -272,7 +333,6 @@ export default function Menu() {
                         onChange={() => setAvailability(p.id, !p.is_available)}
                       />
                     </td>
-                    <td className="px-5 py-4 text-right text-ink-soft">⋯</td>
                   </tr>
                 ))
               )}
@@ -282,19 +342,8 @@ export default function Menu() {
           {/* footer */}
           <div className="flex items-center justify-between p-5">
             <span className="text-sm text-ink-soft">
-              {loading ? 'Loading…' : `Showing ${products.length} of ${products.length} dishes`}
+              {loading ? 'Loading…' : `Showing ${visibleProducts.length} of ${products.length} dishes`}
             </span>
-            <div className="flex items-center gap-1 text-sm">
-              <button className="flex h-8 w-8 items-center justify-center rounded-md border border-line text-ink-soft">
-                ‹
-              </button>
-              <button className="flex h-8 w-8 items-center justify-center rounded-md bg-brand font-semibold text-white">
-                1
-              </button>
-              <button className="flex h-8 w-8 items-center justify-center rounded-md border border-line text-ink-soft">
-                ›
-              </button>
-            </div>
           </div>
         </div>
 
@@ -345,6 +394,81 @@ export default function Menu() {
           </div>
         </div>
       </div>
+
+      {/* Add New Dish dialog */}
+      {showAdd && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <form onSubmit={addDish} className="w-full max-w-md rounded-2xl bg-white shadow-xl">
+            <div className="flex items-center justify-between border-b border-line p-5">
+              <h3 className="text-base font-bold text-ink">Add New Dish</h3>
+              <button
+                type="button"
+                onClick={() => setShowAdd(false)}
+                className="rounded p-1 text-ink-soft hover:bg-line-soft hover:text-ink"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-4 p-5">
+              <div>
+                <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-ink-soft">
+                  Dish name
+                </label>
+                <input
+                  autoFocus
+                  value={form.name}
+                  onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                  placeholder="e.g. Chicken Biryani"
+                  className="w-full rounded-lg border border-line px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-ink-soft">
+                  Price (₹)
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  value={form.price}
+                  onChange={(e) => setForm((f) => ({ ...f, price: e.target.value }))}
+                  placeholder="e.g. 249"
+                  className="w-full rounded-lg border border-line px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-ink-soft">
+                  Description (optional)
+                </label>
+                <textarea
+                  rows={3}
+                  value={form.description}
+                  onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+                  placeholder="Short description shown to customers…"
+                  className="w-full resize-none rounded-lg border border-line px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 border-t border-line p-5">
+              <button
+                type="button"
+                onClick={() => setShowAdd(false)}
+                className="rounded-lg border border-line px-4 py-2.5 text-xs font-semibold text-ink-soft hover:bg-canvas"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={saving}
+                className="flex items-center gap-1.5 rounded-lg bg-brand px-5 py-2.5 text-xs font-bold text-white hover:bg-brand-dark disabled:opacity-50"
+              >
+                <Plus className="h-4 w-4" /> {saving ? 'Adding…' : 'Add Dish'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </>
   )
 }

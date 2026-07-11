@@ -8,6 +8,9 @@ import {
 } from 'lucide-react'
 import Topbar, { TopIcons } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
+import DateRangeFilter from '../components/DateRangeFilter.jsx'
+import { inRange, rangeLabel } from '../lib/dateRange.js'
+import { exportToCsv } from '../lib/csv.js'
 
 /* ---------- animation hook: eases 0 → 1 on mount / data change ---------- */
 function useProgress(trigger) {
@@ -310,6 +313,8 @@ function buildTopItems(orders) {
 export default function Reports() {
   const [orders, setOrders] = useState([])
   const [loading, setLoading] = useState(true)
+  const [range, setRange] = useState(null)
+  const [preset, setPreset] = useState('month')
 
   const load = useCallback(() => {
     return supabase
@@ -334,20 +339,40 @@ export default function Reports() {
     }
   }, [load])
 
-  const earning = orders.filter((o) => o.status !== 'cancelled')
+  // Everything except the rolling 14-day trend respects the selected range.
+  const scoped = orders.filter((o) => inRange(o.created_at, range))
+
+  const earning = scoped.filter((o) => o.status !== 'cancelled')
   const revenue = earning.reduce((s, o) => s + (o.total || 0), 0)
   const avgOrder = earning.length ? Math.round(revenue / earning.length) : 0
-  const delivered = orders.filter((o) => o.status === 'delivered').length
-  const completion = orders.length ? Math.round((delivered / orders.length) * 100) : 0
+  const delivered = scoped.filter((o) => o.status === 'delivered').length
+  const completion = scoped.length ? Math.round((delivered / scoped.length) * 100) : 0
 
   const daily = buildDaily(orders)
-  const statusSegs = buildStatus(orders)
-  const paymentSegs = buildPayment(orders)
-  const topItems = buildTopItems(orders)
+  const statusSegs = buildStatus(scoped)
+  const paymentSegs = buildPayment(scoped)
+  const topItems = buildTopItems(scoped)
 
+  const handleExport = () => {
+    if (scoped.length === 0) {
+      alert('No orders in the selected range to export.')
+      return
+    }
+    const headers = ['Order', 'Date', 'Status', 'Payment', 'Total']
+    const rows = scoped.map((o) => [
+      o.id,
+      o.created_at ? new Date(o.created_at).toLocaleString('en-IN') : '',
+      o.status,
+      o.payment_status || '',
+      o.total ?? 0,
+    ])
+    exportToCsv(`reports-${preset}-${new Date().toISOString().slice(0, 10)}.csv`, headers, rows)
+  }
+
+  const label = rangeLabel(preset, range)
   const kpis = [
     { label: 'TOTAL REVENUE', value: inr(revenue), sub: 'Non-cancelled orders', icon: IndianRupee, iconBg: 'bg-[#ffdad3] text-brand' },
-    { label: 'TOTAL ORDERS', value: String(orders.length), sub: `${delivered} delivered`, icon: ShoppingBag, iconBg: 'bg-info-soft text-info' },
+    { label: 'TOTAL ORDERS', value: String(scoped.length), sub: `${delivered} delivered`, icon: ShoppingBag, iconBg: 'bg-info-soft text-info' },
     { label: 'AVG. ORDER VALUE', value: inr(avgOrder), sub: 'Per order', icon: Receipt, iconBg: 'bg-pos-soft text-pos-dark' },
     { label: 'COMPLETION RATE', value: `${completion}%`, sub: 'Delivered vs all', icon: TrendingUp, iconBg: 'bg-[#fef3c7] text-[#b45309]' },
   ]
@@ -362,7 +387,10 @@ export default function Reports() {
           </span>
         </div>
         <div className="flex items-center gap-2">
-          <button className="flex items-center gap-2 rounded-lg bg-brand px-3 py-2 text-sm font-semibold text-white hover:bg-brand-dark">
+          <button
+            onClick={handleExport}
+            className="flex items-center gap-2 rounded-lg bg-brand px-3 py-2 text-sm font-semibold text-white hover:bg-brand-dark"
+          >
             <Download className="h-4 w-4" /> Export
           </button>
           <TopIcons />
@@ -370,6 +398,13 @@ export default function Reports() {
       </Topbar>
 
       <div className="space-y-6 p-8">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm text-ink-soft">
+            Showing analytics for <span className="font-semibold text-ink">{label}</span>
+          </p>
+          <DateRangeFilter defaultPreset="month" onChange={(r, p) => { setRange(r); setPreset(p) }} />
+        </div>
+
         <div className="grid grid-cols-4 gap-6">
           {kpis.map((k) => (
             <Kpi key={k.label} {...k} />

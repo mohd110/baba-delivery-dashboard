@@ -12,6 +12,7 @@ import {
   Tag,
   AlertCircle,
   HelpCircle,
+  Ban,
 } from 'lucide-react'
 import Topbar, { TopIcons } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
@@ -51,11 +52,22 @@ function typeMetaFor(category) {
   )
 }
 
-// Anything that isn't an explicit "still needs attention" state is treated as
-// resolved for the Active/Resolved tab split.
+// Complaints normalise to one of three states: still-needs-attention (open),
+// cancelled/dismissed, or otherwise resolved.
 const OPEN_STATES = new Set(['open', 'pending', 'in_progress', 'new', 'reopened'])
+const CANCELLED_STATES = new Set(['cancelled', 'canceled', 'dismissed', 'rejected'])
 function normStatus(status) {
-  return OPEN_STATES.has(String(status || 'open').toLowerCase()) ? 'open' : 'resolved'
+  const s = String(status || 'open').toLowerCase()
+  if (CANCELLED_STATES.has(s)) return 'cancelled'
+  return OPEN_STATES.has(s) ? 'open' : 'resolved'
+}
+
+// Badge label + colour for a normalised status.
+const STATUS_LABEL = { open: 'Open', resolved: 'Resolved', cancelled: 'Cancelled' }
+function statusBadgeClass(status) {
+  if (status === 'open') return 'bg-red-50 text-red-700'
+  if (status === 'cancelled') return 'bg-line-soft text-ink-soft'
+  return 'bg-pos-soft text-pos-dark'
 }
 
 function shortId(id, prefix) {
@@ -152,22 +164,31 @@ export default function Complaints() {
 
   const selectedComplaint = complaints.find((c) => c.id === selectedComplaintId)
 
-  // Persist a status change to the database, then update local state.
-  const setResolved = async (id, message) => {
-    if (busy) return
+  // Persist a status change to the database, then update local state. `dbStatus`
+  // is written to the row; `localStatus` is the normalised state we render with.
+  const updateStatus = async (id, dbStatus, localStatus, message) => {
+    if (busy) return false
     setBusy(id)
-    const { error } = await supabase.from('complaints').update({ status: 'resolved' }).eq('id', id)
+    const { error } = await supabase.from('complaints').update({ status: dbStatus }).eq('id', id)
     setBusy(null)
     if (error) {
       showToast(`Could not update complaint: ${error.message}`)
       return false
     }
-    setComplaints((prev) => prev.map((c) => (c.id === id ? { ...c, status: 'resolved' } : c)))
+    setComplaints((prev) => prev.map((c) => (c.id === id ? { ...c, status: localStatus } : c)))
     if (message) showToast(message)
     return true
   }
 
+  const setResolved = (id, message) => updateStatus(id, 'resolved', 'resolved', message)
+
   const handleResolve = (id) => setResolved(id, 'Complaint marked as RESOLVED successfully.')
+
+  const handleCancel = (id) => {
+    if (busy) return
+    if (!window.confirm('Cancel this complaint? It will be dismissed and removed from the active queue.')) return
+    updateStatus(id, 'cancelled', 'cancelled', 'Complaint cancelled and dismissed.')
+  }
 
   const handleRefund = (complaint) => {
     const amount = complaint.orderTotal != null ? `₹${complaint.orderTotal}` : 'the order amount'
@@ -307,12 +328,8 @@ export default function Complaints() {
                         <ComplaintIcon className="h-2.5 w-2.5" /> {typeMeta.label}
                       </span>
 
-                      <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
-                        c.status === 'open'
-                          ? 'bg-red-100 text-red-700'
-                          : 'bg-pos-soft text-pos-dark'
-                      }`}>
-                        {c.status === 'open' ? 'Open' : 'Resolved'}
+                      <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${statusBadgeClass(c.status)}`}>
+                        {STATUS_LABEL[c.status]}
                       </span>
                     </div>
                   </div>
@@ -334,10 +351,8 @@ export default function Complaints() {
                       <h2 className="text-lg font-bold text-ink">
                         Complaint Report: {selectedComplaint.code}
                       </h2>
-                      <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-bold ${
-                        selectedComplaint.status === 'open' ? 'bg-red-50 text-red-700' : 'bg-pos-soft text-pos-dark'
-                      }`}>
-                        {selectedComplaint.status === 'open' ? 'Open' : 'Resolved'}
+                      <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-bold ${statusBadgeClass(selectedComplaint.status)}`}>
+                        {STATUS_LABEL[selectedComplaint.status]}
                       </span>
                     </div>
                     <p className="text-xs text-ink-soft mt-1">
@@ -472,7 +487,7 @@ export default function Complaints() {
                     <div className="space-y-2">
                       <button
                         onClick={() => handleRefund(selectedComplaint)}
-                        disabled={selectedComplaint.status === 'resolved' || busy === selectedComplaint.id}
+                        disabled={selectedComplaint.status !== 'open' || busy === selectedComplaint.id}
                         className="flex w-full items-center justify-center gap-2 rounded-lg bg-brand py-2.5 text-xs font-bold text-white hover:bg-brand-dark transition-colors shadow-sm disabled:opacity-50"
                       >
                         <CornerUpLeft className="h-4 w-4" /> Refund Customer
@@ -481,20 +496,33 @@ export default function Complaints() {
 
                       <button
                         onClick={() => handleRedispatch(selectedComplaint)}
-                        disabled={selectedComplaint.status === 'resolved' || busy === selectedComplaint.id}
+                        disabled={selectedComplaint.status !== 'open' || busy === selectedComplaint.id}
                         className="flex w-full items-center justify-center gap-2 rounded-lg border border-line bg-white py-2.5 text-xs font-bold text-ink hover:bg-canvas transition-colors disabled:opacity-50"
                       >
                         <Truck className="h-4 w-4" /> Re-dispatch Missing Items
                       </button>
 
                       {selectedComplaint.status === 'open' ? (
-                        <button
-                          onClick={() => handleResolve(selectedComplaint.id)}
-                          disabled={busy === selectedComplaint.id}
-                          className="flex w-full items-center justify-center gap-2 rounded-lg bg-pos py-2.5 text-xs font-bold text-white hover:bg-pos-dark transition-colors shadow-sm disabled:opacity-50"
-                        >
-                          <Check className="h-4 w-4" strokeWidth={3} /> Mark Complaint Resolved
-                        </button>
+                        <>
+                          <button
+                            onClick={() => handleResolve(selectedComplaint.id)}
+                            disabled={busy === selectedComplaint.id}
+                            className="flex w-full items-center justify-center gap-2 rounded-lg bg-pos py-2.5 text-xs font-bold text-white hover:bg-pos-dark transition-colors shadow-sm disabled:opacity-50"
+                          >
+                            <Check className="h-4 w-4" strokeWidth={3} /> Mark Complaint Resolved
+                          </button>
+                          <button
+                            onClick={() => handleCancel(selectedComplaint.id)}
+                            disabled={busy === selectedComplaint.id}
+                            className="flex w-full items-center justify-center gap-2 rounded-lg border border-red-200 bg-white py-2.5 text-xs font-bold text-red-600 hover:bg-red-50 hover:border-red-300 transition-colors disabled:opacity-50"
+                          >
+                            <Ban className="h-4 w-4" /> Cancel Complaint
+                          </button>
+                        </>
+                      ) : selectedComplaint.status === 'cancelled' ? (
+                        <div className="flex items-center justify-center gap-1.5 rounded-lg bg-line-soft py-2.5 text-xs font-bold text-ink-soft border border-line">
+                          <Ban className="h-4 w-4" /> Complaint Cancelled
+                        </div>
                       ) : (
                         <div className="flex items-center justify-center gap-1.5 rounded-lg bg-pos-soft py-2.5 text-xs font-bold text-pos-dark border border-pos-soft">
                           <CheckCircle className="h-4 w-4" /> Complaint Resolved

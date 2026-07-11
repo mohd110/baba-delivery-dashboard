@@ -1,4 +1,5 @@
 import { Search, Bell, LayoutGrid } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 
 /* Header shell — pages compose their own left/right content */
 export default function Topbar({ children }) {
@@ -9,22 +10,31 @@ export default function Topbar({ children }) {
   )
 }
 
-export function SearchBox({ placeholder, className = '' }) {
+// Controlled search input. Pass `value` + `onChange` to actually filter a list;
+// omit them and it stays a plain (uncontrolled) box.
+export function SearchBox({ placeholder, className = '', value, onChange }) {
   return (
     <div className={`relative ${className}`}>
       <Search className="absolute left-3 top-1/2 h-[18px] w-[18px] -translate-y-1/2 text-ink-soft" />
       <input
         type="text"
         placeholder={placeholder}
+        value={value ?? undefined}
+        onChange={onChange ? (e) => onChange(e.target.value) : undefined}
         className="w-full rounded-full bg-line-soft py-[9px] pl-10 pr-4 text-sm text-ink placeholder:text-ink-soft focus:outline-none"
       />
     </div>
   )
 }
 
-export function IconButton({ icon: Icon, dot = false }) {
+export function IconButton({ icon: Icon, dot = false, onClick, title }) {
   return (
-    <button className="relative flex h-9 w-9 items-center justify-center rounded-lg text-ink-soft hover:bg-line-soft hover:text-ink">
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      className="relative flex h-9 w-9 items-center justify-center rounded-lg text-ink-soft hover:bg-line-soft hover:text-ink"
+    >
       <Icon className="h-5 w-5" />
       {dot && (
         <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-brand ring-2 ring-white" />
@@ -34,10 +44,11 @@ export function IconButton({ icon: Icon, dot = false }) {
 }
 
 export function TopIcons() {
+  const navigate = useNavigate()
   return (
     <>
-      <IconButton icon={Bell} dot />
-      <IconButton icon={LayoutGrid} />
+      <IconButton icon={Bell} onClick={() => navigate('/orders')} title="Active orders" />
+      <IconButton icon={LayoutGrid} onClick={() => navigate('/dashboard')} title="Dashboard overview" />
     </>
   )
 }

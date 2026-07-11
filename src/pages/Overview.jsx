@@ -1,12 +1,11 @@
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   IndianRupee,
   ShoppingBag,
   Store,
   Flame,
-  ChevronDown,
   Download,
-  Plus,
   Clock,
   ChefHat,
   CheckCircle2,
@@ -14,6 +13,9 @@ import {
 import Topbar, { SearchBox, TopIcons, Divider, ProfileChip } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
 import { orderCode } from '../lib/format.js'
+import DateRangeFilter from '../components/DateRangeFilter.jsx'
+import { inRange, rangeLabel } from '../lib/dateRange.js'
+import { exportToCsv } from '../lib/csv.js'
 
 function dishImg(name = '') {
   const n = name.toLowerCase()
@@ -180,6 +182,10 @@ function BottomCard({ label, value, sub, subTone, icon: Icon }) {
 /* ---------- Page ---------- */
 export default function Overview() {
   const [orders, setOrders] = useState([])
+  const [range, setRange] = useState(null)
+  const [preset, setPreset] = useState('today')
+  const [searchQuery, setSearchQuery] = useState('')
+  const navigate = useNavigate()
 
   useEffect(() => {
     let alive = true
@@ -207,13 +213,15 @@ export default function Overview() {
     }
   }, [])
 
-  // Cancelled orders never earned money, so keep them out of revenue figures.
-  const earning = orders.filter((o) => o.status !== 'cancelled')
+  // KPIs respect the selected date range. Cancelled orders never earned money,
+  // so keep them out of revenue figures.
+  const scoped = orders.filter((o) => inRange(o.created_at, range))
+  const earning = scoped.filter((o) => o.status !== 'cancelled')
   const totalSalesNum = earning.reduce((s, o) => s + (o.total || 0), 0)
   const totalSales = `₹${totalSalesNum.toLocaleString('en-IN')}`
-  const totalOrders = orders.length.toLocaleString('en-IN')
+  const totalOrders = scoped.length.toLocaleString('en-IN')
 
-  // most-ordered dish across all order_items
+  // most-ordered dish across all order_items in range
   const counts = {}
   earning.forEach((o) =>
     (o.order_items ?? []).forEach((it) => {
@@ -224,11 +232,27 @@ export default function Overview() {
   const topItem = Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? '—'
 
   const kpis = buildKpis(totalSales, totalOrders, topItem)
-  const dailySales = buildDailySales(earning)
+  // Sales trend stays a rolling 7-day view, independent of the KPI range.
+  const dailySales = buildDailySales(orders.filter((o) => o.status !== 'cancelled'))
 
   const pending = orders.filter((o) => o.status === 'pending').length
   const preparing = orders.filter((o) => ['accepted', 'preparing'].includes(o.status)).length
   const ready = orders.filter((o) => o.status === 'ready').length
+
+  const handleExport = () => {
+    if (scoped.length === 0) {
+      alert('No orders in the selected range to export.')
+      return
+    }
+    const headers = ['Order', 'Date', 'Status', 'Total']
+    const rows = scoped.map((o) => [
+      orderCode(o),
+      o.created_at ? new Date(o.created_at).toLocaleString('en-IN') : '',
+      o.status,
+      o.total ?? 0,
+    ])
+    exportToCsv(`overview-${preset}-${new Date().toISOString().slice(0, 10)}.csv`, headers, rows)
+  }
 
   const bottomCards = [
     { label: 'Pending', value: `${pending} order${pending === 1 ? '' : 's'}`, sub: 'Awaiting acceptance', subTone: 'text-ink-soft', icon: Clock },
@@ -236,7 +260,16 @@ export default function Overview() {
     { label: 'Ready', value: `${ready} order${ready === 1 ? '' : 's'}`, sub: 'Awaiting pickup', subTone: 'text-pos', icon: CheckCircle2 },
   ]
 
-  const recent = orders.slice(0, 4).map((o) => {
+  const recentMatches = orders.filter((o) => {
+    if (!searchQuery) return true
+    const q = searchQuery.toLowerCase()
+    const name = o.delivery_address?.name?.toLowerCase() || ''
+    const id = orderCode(o).toLowerCase()
+    const items = o.order_items?.map((it) => it.products?.name?.toLowerCase() || '').join(' ') || ''
+    return name.includes(q) || id.includes(q) || items.includes(q)
+  })
+
+  const recent = recentMatches.slice(0, 4).map((o) => {
     const items = o.order_items ?? []
     const first = items[0]
     const name = first?.products?.name ?? 'Order'
@@ -253,7 +286,12 @@ export default function Overview() {
   return (
     <>
       <Topbar>
-        <SearchBox placeholder="Search orders, menus, or customers..." className="w-full max-w-[448px]" />
+        <SearchBox
+          placeholder="Search recent orders by ID, name, or item..."
+          className="w-full max-w-[448px]"
+          value={searchQuery}
+          onChange={setSearchQuery}
+        />
         <div className="flex items-center gap-1">
           <TopIcons />
           <Divider />
@@ -266,15 +304,15 @@ export default function Overview() {
         <div>
           <h1 className="text-[32px] font-bold leading-8 text-ink">Dashboard Overview</h1>
           <p className="mt-2 text-base text-ink-soft">
-            Real-time performance metrics for Wali Baba Foods.
+            Performance metrics for Wali Baba Foods — {rangeLabel(preset, range)}.
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <button className="flex items-center gap-2 rounded-lg border border-line bg-white px-4 py-2.5 text-sm font-medium text-ink">
-            Last 30 Days
-            <ChevronDown className="h-3.5 w-3.5" />
-          </button>
-          <button className="flex items-center gap-2 rounded-lg bg-brand px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-brand-dark">
+          <DateRangeFilter defaultPreset="today" onChange={(r, p) => { setRange(r); setPreset(p) }} />
+          <button
+            onClick={handleExport}
+            className="flex items-center gap-2 rounded-lg bg-brand px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-brand-dark"
+          >
             <Download className="h-3.5 w-3.5" />
             Export Report
           </button>
@@ -312,7 +350,9 @@ export default function Overview() {
         <div className="flex flex-col rounded-xl border border-line bg-white p-[21px]">
           <div className="flex items-center justify-between">
             <h2 className="text-xl font-semibold text-ink">Recent Orders</h2>
-            <button className="text-sm font-semibold text-brand">View All</button>
+            <button onClick={() => navigate('/orders')} className="text-sm font-semibold text-brand hover:underline">
+              View All
+            </button>
           </div>
           <div className="mt-2 flex-1 divide-y divide-line-soft">
             {recent.length === 0 ? (
@@ -336,11 +376,6 @@ export default function Overview() {
           <BottomCard key={c.label} {...c} />
         ))}
       </div>
-
-      {/* FAB */}
-      <button className="fixed bottom-8 right-8 flex h-14 w-14 items-center justify-center rounded-full bg-brand text-white shadow-lg hover:bg-brand-dark">
-        <Plus className="h-5 w-5" />
-      </button>
       </div>
     </>
   )
