@@ -142,6 +142,7 @@ function OutletCard({ o }) {
 export default function Outlets() {
   const [outlets, setOutlets] = useState([])
   const [loading, setLoading] = useState(true)
+  const [searchQuery, setSearchQuery] = useState('')
 
   const load = useCallback(() => {
     return supabase
@@ -166,6 +167,13 @@ export default function Outlets() {
     }
   }, [load])
 
+  const q = searchQuery.trim().toLowerCase()
+  const visibleOutlets = q
+    ? outlets.filter((o) =>
+        [o.name, o.cuisine_type, o.address].some((v) => (v || '').toLowerCase().includes(q))
+      )
+    : outlets
+
   const open = outlets.filter((o) => o.is_open).length
   const closed = outlets.length - open
   const avgFee = outlets.length
@@ -189,7 +197,12 @@ export default function Outlets() {
           </span>
         </div>
         <div className="flex items-center gap-2">
-          <SearchBox placeholder="Search outlets..." className="w-[260px]" />
+          <SearchBox
+            placeholder="Search outlets..."
+            className="w-[260px]"
+            value={searchQuery}
+            onChange={setSearchQuery}
+          />
           <TopIcons />
         </div>
       </Topbar>
@@ -204,7 +217,7 @@ export default function Outlets() {
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-bold text-ink">Outlets</h2>
           <span className="text-sm text-ink-soft">
-            {loading ? 'Loading…' : `${outlets.length} outlet${outlets.length === 1 ? '' : 's'}`}
+            {loading ? 'Loading…' : `${visibleOutlets.length} outlet${visibleOutlets.length === 1 ? '' : 's'}`}
           </span>
         </div>
 
@@ -212,13 +225,13 @@ export default function Outlets() {
           <div className="rounded-xl border border-line bg-white px-5 py-12 text-center text-sm text-ink-soft">
             Loading outlets…
           </div>
-        ) : outlets.length === 0 ? (
+        ) : visibleOutlets.length === 0 ? (
           <div className="rounded-xl border border-line bg-white px-5 py-12 text-center text-sm text-ink-soft">
-            No outlets yet — they appear here once a restaurant is added.
+            {q ? 'No outlets match your search.' : 'No outlets yet — they appear here once a restaurant is added.'}
           </div>
         ) : (
           <div className="grid grid-cols-3 gap-6">
-            {outlets.map((o) => (
+            {visibleOutlets.map((o) => (
               <OutletCard key={o.id} o={o} />
             ))}
           </div>

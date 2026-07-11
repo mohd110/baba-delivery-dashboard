@@ -2,22 +2,20 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   History,
   Search,
-  Calendar,
-  Clock,
   X,
   FileSpreadsheet,
   CheckCircle,
   XCircle,
   Hash,
-  MapPin,
-  Bike,
   Phone,
   Wallet,
-  ExternalLink,
 } from 'lucide-react'
 import Topbar, { TopIcons } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
 import { orderCode } from '../lib/format.js'
+import DateRangeFilter from '../components/DateRangeFilter.jsx'
+import { inRange } from '../lib/dateRange.js'
+import { exportToCsv } from '../lib/csv.js'
 
 function imgFor(name = '') {
   const n = name.toLowerCase()
@@ -39,7 +37,8 @@ export default function OrderHistory() {
   const [loading, setLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState('all') // 'all', 'delivered', 'cancelled'
-  const [dateFilter, setDateFilter] = useState('7d') // 'today', '7d', '30d', 'all'
+  const [range, setRange] = useState(null)
+  const [preset, setPreset] = useState('today')
   const [selectedOrderId, setSelectedOrderId] = useState(null)
 
   const load = useCallback(() => {
@@ -75,22 +74,8 @@ export default function OrderHistory() {
       if (!customerName.includes(q) && !orderId.includes(q) && !items.includes(q)) return false
     }
 
-    // Date filter check
-    if (dateFilter !== 'all') {
-      const date = new Date(o.created_at)
-      const now = new Date()
-      const diffTime = Math.abs(now - date)
-      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24))
-
-      if (dateFilter === 'today') {
-        const isToday = date.toDateString() === now.toDateString()
-        if (!isToday) return false
-      } else if (dateFilter === '7d' && diffDays > 7) {
-        return false
-      } else if (dateFilter === '30d' && diffDays > 30) {
-        return false
-      }
-    }
+    // Date range check
+    if (!inRange(o.created_at, range)) return false
 
     return true
   })
@@ -98,14 +83,26 @@ export default function OrderHistory() {
   // Selected Order
   const selectedOrder = orders.find((o) => o.id === selectedOrderId)
 
-  // Calculations for KPIs based on history
-  const deliveredCount = orders.filter(o => o.status === 'delivered').length
-  const cancelledCount = orders.filter(o => o.status === 'cancelled').length
-  const totalRevenue = orders.filter(o => o.status === 'delivered').reduce((sum, o) => sum + (o.total ?? 0), 0)
+  // Tab counts reflect the selected date range (but not the status/search filter).
+  const dateScoped = orders.filter((o) => inRange(o.created_at, range))
+  const deliveredCount = dateScoped.filter(o => o.status === 'delivered').length
+  const cancelledCount = dateScoped.filter(o => o.status === 'cancelled').length
 
   const handleExportCSV = () => {
-    // Mock export
-    alert('Exporting historical order records to CSV...')
+    if (filteredOrders.length === 0) {
+      alert('No historical records in the current filter to export.')
+      return
+    }
+    const headers = ['Order ID', 'Date', 'Customer', 'Items', 'Total', 'Status']
+    const rows = filteredOrders.map((o) => [
+      orderCode(o),
+      o.created_at ? new Date(o.created_at).toLocaleString('en-IN') : '',
+      o.delivery_address?.name || 'Customer',
+      o.order_items?.map((it) => `${it.quantity}x ${it.products?.name || 'Item'}`).join('; ') || '',
+      o.total ?? 0,
+      o.status,
+    ])
+    exportToCsv(`order-history-${preset}-${new Date().toISOString().slice(0, 10)}.csv`, headers, rows)
   }
 
   return (
@@ -144,7 +141,7 @@ export default function OrderHistory() {
                     : 'bg-white text-ink-soft border-line hover:border-ink-soft'
                 }`}
               >
-                All Orders ({orders.length})
+                All Orders ({dateScoped.length})
               </button>
               <button
                 onClick={() => setStatusFilter('delivered')}
@@ -169,20 +166,8 @@ export default function OrderHistory() {
             </div>
 
             <div className="flex items-center gap-3">
-              {/* Date Filter selector */}
-              <div className="relative">
-                <Calendar className="absolute top-2.5 left-3 h-3.5 w-3.5 text-ink-soft" />
-                <select
-                  value={dateFilter}
-                  onChange={(e) => setDateFilter(e.target.value)}
-                  className="rounded-lg border border-line bg-white pl-9 pr-8 py-2 text-xs font-semibold text-ink-soft focus:border-brand focus:outline-none"
-                >
-                  <option value="today">Today</option>
-                  <option value="7d">Last 7 Days</option>
-                  <option value="30d">Last 30 Days</option>
-                  <option value="all">All Time</option>
-                </select>
-              </div>
+              {/* Date range filter: Today / Yesterday / This Month / Custom */}
+              <DateRangeFilter defaultPreset="today" onChange={(r, p) => { setRange(r); setPreset(p) }} />
 
               {/* Search */}
               <div className="relative w-64">
