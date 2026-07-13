@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Plus, LayoutGrid, CookingPot, Beef, IceCream, Flame, Soup,
-  Sandwich, MoreHorizontal, TrendingUp, CheckCircle2, AlertTriangle,
+  Sandwich, TrendingUp, CheckCircle2, AlertTriangle,
   XCircle, X, Upload, ImagePlus, Trash2, Pencil, Tag,
 } from 'lucide-react'
 import Topbar, { SearchBox, TopIcons, Divider, ProfileChip } from '../layout/Topbar.jsx'
@@ -19,7 +19,7 @@ const CAT_ICONS = {
   biryani: CookingPot, fry: Flame, gravy: Soup, kebabs: Beef,
   tandoor: Flame, breads: Sandwich, dessert: IceCream,
 }
-const catIcon = (slug) => CAT_ICONS[slug] ?? MoreHorizontal
+const catIcon = (slug) => CAT_ICONS[slug] ?? null
 
 // Guess category from name when DB field is null
 function guessCategory(name = '') {
@@ -561,7 +561,7 @@ export default function Menu() {
                 return (
                   <button key={cat.slug} onClick={() => setActive(cat.slug)}
                     className={`flex shrink-0 items-center gap-2 border-b-2 py-4 text-sm font-semibold transition-colors ${active === cat.slug ? 'border-brand text-brand' : 'border-transparent text-ink-soft hover:text-ink'}`}>
-                    <Icon className="h-4 w-4" /> {cat.name}
+                    {Icon && <Icon className="h-4 w-4" />} {cat.name}
                     <CountBadge count={catCounts[cat.slug] || 0} active={active === cat.slug} />
                   </button>
                 )
