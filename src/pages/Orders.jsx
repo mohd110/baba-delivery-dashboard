@@ -200,7 +200,7 @@ function customerNote(order) {
 // Kitchen Order Ticket — mirrors the thermal KOT layout.
 function buildKotHtml(order) {
   const placed = new Date(order.created_at)
-  const prepBy = new Date(placed.getTime() + 15 * 60000)
+  const prepBy = new Date(placed.getTime() + (order.eta_minutes ?? 15) * 60000)
   const { token } = ticketNumbers(order)
   const items = order.order_items ?? []
   const type = (order.order_type || 'Delivery').replace(/\b\w/g, (c) => c.toUpperCase())
@@ -407,6 +407,11 @@ const STATUS = {
   cancelled: { label: 'Cancelled', bg: 'bg-red-50', text: 'text-red-700', border: 'border-red-100', dot: 'bg-red-500' },
 }
 
+// Prep-time presets (minutes) offered when accepting an order. The chosen
+// value is written to orders.eta_minutes and drives the customer's ETA.
+const ETA_PRESETS = [15, 20, 30, 45, 60]
+const DEFAULT_ETA = 30
+
 const NEXT_ACTION = {
   // Accept jumps straight to 'preparing' — no intermediate 'accepted' step.
   pending: { label: 'Accept Order', to: 'preparing', verifyPayment: true, icon: ShieldCheck, color: 'bg-brand hover:bg-brand-dark' },
@@ -465,6 +470,10 @@ export default function Orders() {
   const [cancelTarget, setCancelTarget] = useState(null)
   const [cancelReason, setCancelReason] = useState(CANCEL_REASONS[0])
   const [cancelNote, setCancelNote] = useState('')
+  // Accept flow: the order awaiting accept + the chosen prep time (minutes).
+  const [acceptTarget, setAcceptTarget] = useState(null)
+  const [etaMinutes, setEtaMinutes] = useState(DEFAULT_ETA)
+  const [etaCustom, setEtaCustom] = useState('')
 
   // Restaurant open/closed state (shared with Outlets + Settings).
   const { isOpen: storeOpen, loading: storeLoading, setOpen: setStoreOpen } = useRestaurant()
@@ -593,19 +602,29 @@ export default function Orders() {
   const patchLocal = (id, patch) =>
     setOrders((prev) => prev.map((o) => (o.id === id ? { ...o, ...patch } : o)))
 
-  const advance = async (order) => {
+  const advance = async (order, opts = {}) => {
     const action = NEXT_ACTION[order.status]
     if (!action || busy) return
     const patch = { status: action.to }
     if (action.verifyPayment) patch.payment_status = 'verified'
+    // Stamp the prep time when accepting so the customer gets a real ETA.
+    if (action.to === 'preparing' && opts.etaMinutes != null) patch.eta_minutes = opts.etaMinutes
     setBusy(order.id)
-    const { error } = await supabase.from('orders').update(patch).eq('id', order.id)
+    let appliedPatch = patch
+    let { error } = await supabase.from('orders').update(patch).eq('id', order.id)
+    // If the eta_minutes column isn't there yet (migration 015 not run), retry
+    // without it so accepting orders still works.
+    if (error && patch.eta_minutes != null && /eta_minutes|schema cache|column/i.test(error.message)) {
+      const { eta_minutes: _dropped, ...rest } = patch
+      appliedPatch = rest
+      ;({ error } = await supabase.from('orders').update(rest).eq('id', order.id))
+    }
     setBusy(null)
     if (error) {
       alert(`Could not update order: ${error.message}`)
       return
     }
-    patchLocal(order.id, patch)
+    patchLocal(order.id, appliedPatch)
     if (action.to === 'preparing') {
       notifyCustomer(order, { title: '👨‍🍳 Order Confirmed!', body: 'Your order is being prepared.' })
     } else if (action.to === 'ready') {
@@ -620,6 +639,26 @@ export default function Orders() {
       setActiveTab('ready')
       setSelectedOrderId(order.id)
     }
+  }
+
+  // Open the accept dialog (prep-time picker) for a pending order.
+  const openAccept = (order) => {
+    if (busy) return
+    setEtaMinutes(order.eta_minutes || DEFAULT_ETA)
+    setEtaCustom('')
+    setAcceptTarget(order)
+  }
+
+  const confirmAccept = async () => {
+    const order = acceptTarget
+    if (!order) return
+    const mins = etaMinutes === 'custom' ? Number(etaCustom) : etaMinutes
+    if (!Number.isFinite(mins) || mins <= 0) {
+      alert('Enter a valid prep time in minutes.')
+      return
+    }
+    setAcceptTarget(null)
+    await advance(order, { etaMinutes: Math.round(mins) })
   }
 
   // Open the cancellation dialog for an order (resets the reason picker).
@@ -994,11 +1033,30 @@ export default function Orders() {
                         Order {orderCode(selectedOrder)}
                       </h2>
                       <StatusBadge status={selectedOrder.status} />
+                      {selectedOrder.eta_minutes > 0 &&
+                        !['delivered', 'cancelled'].includes(selectedOrder.status) && (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-brand-light px-2.5 py-0.5 text-xs font-semibold text-brand">
+                            <Clock className="h-3 w-3" /> Ready in {selectedOrder.eta_minutes} min
+                          </span>
+                        )}
                     </div>
                     <p className="mt-1 text-xs text-ink-soft flex items-center gap-2">
                       <span>Placed {new Date(selectedOrder.created_at).toLocaleTimeString()}</span>
                       <span>•</span>
                       <span className="font-semibold text-brand">{elapsed(selectedOrder.created_at)} ago</span>
+                      {selectedOrder.eta_minutes > 0 &&
+                        !['delivered', 'cancelled'].includes(selectedOrder.status) && (
+                          <>
+                            <span>•</span>
+                            <span>
+                              Ready by{' '}
+                              {new Date(
+                                new Date(selectedOrder.created_at).getTime() +
+                                  selectedOrder.eta_minutes * 60000
+                              ).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+                            </span>
+                          </>
+                        )}
                     </p>
                   </div>
 
@@ -1290,7 +1348,7 @@ export default function Orders() {
                         <button
                           type="button"
                           disabled={busy === selectedOrder.id}
-                          onClick={() => advance(selectedOrder)}
+                          onClick={() => openAccept(selectedOrder)}
                           className={`flex items-center gap-1.5 rounded-lg px-6 py-2.5 text-xs font-bold text-white transition-all shadow-md ${NEXT_ACTION.pending.color} disabled:opacity-50`}
                         >
                           <ShieldCheck className="h-4 w-4" /> {NEXT_ACTION.pending.label}
@@ -1342,6 +1400,96 @@ export default function Orders() {
       </div>
 
       {/* Cancellation reason dialog */}
+      {acceptTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white shadow-xl">
+            <div className="flex items-start justify-between border-b border-line p-5">
+              <div className="flex items-center gap-2">
+                <span className="rounded-lg bg-brand-light p-2 text-brand">
+                  <Clock className="h-5 w-5" />
+                </span>
+                <div>
+                  <h3 className="text-base font-bold text-ink">
+                    Accept order {orderCode(acceptTarget)}
+                  </h3>
+                  <p className="text-xs text-ink-soft">How long until it&apos;s ready? The customer sees this as their ETA.</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAcceptTarget(null)}
+                className="rounded p-1 text-ink-soft hover:bg-line-soft hover:text-ink transition-colors"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="p-5">
+              <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-ink-soft">Ready in</p>
+              <div className="flex flex-wrap gap-2">
+                {ETA_PRESETS.map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => setEtaMinutes(m)}
+                    className={`rounded-lg border px-4 py-2 text-sm font-semibold transition-colors ${
+                      etaMinutes === m
+                        ? 'border-brand bg-brand text-white'
+                        : 'border-line text-ink-soft hover:border-brand hover:text-brand'
+                    }`}
+                  >
+                    {m} min
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => setEtaMinutes('custom')}
+                  className={`rounded-lg border px-4 py-2 text-sm font-semibold transition-colors ${
+                    etaMinutes === 'custom'
+                      ? 'border-brand bg-brand text-white'
+                      : 'border-line text-ink-soft hover:border-brand hover:text-brand'
+                  }`}
+                >
+                  Custom
+                </button>
+              </div>
+              {etaMinutes === 'custom' && (
+                <div className="mt-3 flex items-center gap-2">
+                  <input
+                    type="number"
+                    min="1"
+                    autoFocus
+                    value={etaCustom}
+                    onChange={(e) => setEtaCustom(e.target.value)}
+                    placeholder="e.g. 25"
+                    className="w-28 rounded-lg border border-line px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none"
+                  />
+                  <span className="text-sm text-ink-soft">minutes</span>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-3 border-t border-line p-5">
+              <button
+                type="button"
+                onClick={() => setAcceptTarget(null)}
+                className="rounded-lg border border-line px-4 py-2.5 text-xs font-semibold text-ink-soft hover:bg-canvas transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={busy === acceptTarget.id}
+                onClick={confirmAccept}
+                className="flex items-center gap-1.5 rounded-lg bg-brand px-5 py-2.5 text-xs font-bold text-white hover:bg-brand-dark transition-colors disabled:opacity-50"
+              >
+                <ShieldCheck className="h-4 w-4" /> Accept &amp; Start Preparing
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {cancelTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-md rounded-2xl bg-white shadow-xl">

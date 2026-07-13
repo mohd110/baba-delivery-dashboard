@@ -64,7 +64,7 @@ export default function Sidebar() {
     const { count: compCount, error: compErr } = await supabase
       .from('complaints')
       .select('id', { count: 'exact', head: true })
-      .not('status', 'in', '("resolved","closed")')
+      .not('status', 'in', '("resolved","closed","cancelled")')
     if (!compErr) setComplaintCount(compCount ?? 0)
   }
 

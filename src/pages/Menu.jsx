@@ -134,6 +134,19 @@ function PhotoUploader({ value, onChange, uploading }) {
   )
 }
 
+/* ── Category count badge (theme-coloured circle) ───── */
+function CountBadge({ count, active }) {
+  return (
+    <span
+      className={`flex h-5 min-w-[20px] items-center justify-center rounded-full px-1.5 text-[10px] font-bold ${
+        active ? 'bg-brand text-white' : 'bg-brand-light text-brand'
+      }`}
+    >
+      {count}
+    </span>
+  )
+}
+
 /* ── Variants editor ────────────────────────────────── */
 function VariantsEditor({ variants, onChange }) {
   const add = () => onChange([...variants, { name: '', price: '' }])
@@ -425,6 +438,12 @@ export default function Menu() {
 
   const inStock  = products.filter((p) => p.is_available).length
   const soldOut  = products.filter((p) => !p.is_available).length
+  // Item count per category slug, for the tab badges.
+  const catCounts = products.reduce((acc, p) => {
+    const slug = effectiveCategory(p.category, p.name)
+    acc[slug] = (acc[slug] || 0) + 1
+    return acc
+  }, {})
   const pad      = (n) => String(n).padStart(2, '0')
   const avgPrice = products.length ? Math.round(products.reduce((s, p) => s + (p.price || 0), 0) / products.length) : 0
   const categoryCount = new Set(products.map((p) => effectiveCategory(p.category, p.name))).size
@@ -534,6 +553,7 @@ export default function Menu() {
               <button onClick={() => setActive('all')}
                 className={`flex shrink-0 items-center gap-2 border-b-2 py-4 text-sm font-semibold transition-colors ${active === 'all' ? 'border-brand text-brand' : 'border-transparent text-ink-soft hover:text-ink'}`}>
                 <LayoutGrid className="h-4 w-4" /> All
+                <CountBadge count={products.length} active={active === 'all'} />
               </button>
               {/* Dynamic category tabs */}
               {categories.map((cat) => {
@@ -542,6 +562,7 @@ export default function Menu() {
                   <button key={cat.slug} onClick={() => setActive(cat.slug)}
                     className={`flex shrink-0 items-center gap-2 border-b-2 py-4 text-sm font-semibold transition-colors ${active === cat.slug ? 'border-brand text-brand' : 'border-transparent text-ink-soft hover:text-ink'}`}>
                     <Icon className="h-4 w-4" /> {cat.name}
+                    <CountBadge count={catCounts[cat.slug] || 0} active={active === cat.slug} />
                   </button>
                 )
               })}
