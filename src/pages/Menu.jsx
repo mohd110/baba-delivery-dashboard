@@ -441,7 +441,7 @@ export default function Menu() {
   ]
 
   /* ── Shared modal form fields ── */
-  const DishFormFields = ({ isEdit }) => (
+  const renderDishFormFields = (isEdit) => (
     <div className="space-y-4 p-5">
       <PhotoUploader
         value={form.photoPreview}
@@ -693,7 +693,7 @@ export default function Menu() {
               <button type="button" onClick={() => { setShowAdd(false); setForm(EMPTY_FORM) }}
                 className="rounded p-1 text-ink-soft hover:bg-line-soft hover:text-ink"><X className="h-4 w-4" /></button>
             </div>
-            <DishFormFields isEdit={false} />
+            {renderDishFormFields(false)}
             <div className="flex items-center justify-end gap-3 border-t border-line p-5">
               <button type="button" onClick={() => { setShowAdd(false); setForm(EMPTY_FORM) }}
                 className="rounded-lg border border-line px-4 py-2.5 text-xs font-semibold text-ink-soft hover:bg-canvas">Cancel</button>
@@ -721,7 +721,7 @@ export default function Menu() {
               <button type="button" onClick={() => { setEditTarget(null); setForm(EMPTY_FORM) }}
                 className="rounded p-1 text-ink-soft hover:bg-line-soft hover:text-ink"><X className="h-4 w-4" /></button>
             </div>
-            <DishFormFields isEdit={true} />
+            {renderDishFormFields(true)}
             <div className="flex items-center justify-end gap-3 border-t border-line p-5">
               <button type="button" onClick={() => { setEditTarget(null); setForm(EMPTY_FORM) }}
                 className="rounded-lg border border-line px-4 py-2.5 text-xs font-semibold text-ink-soft hover:bg-canvas">Cancel</button>
