@@ -17,3 +17,12 @@ export const supabase = createClient(url, anonKey, {
     storage: typeof window !== 'undefined' ? window.localStorage : undefined,
   },
 })
+
+// A throwaway client that never persists or overwrites the main session. Used
+// for admin actions that call signUp() (e.g. creating a rider account) which
+// would otherwise replace the currently signed-in admin's session.
+export function createIsolatedClient() {
+  return createClient(url, anonKey, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+  })
+}

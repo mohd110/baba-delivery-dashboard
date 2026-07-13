@@ -7,9 +7,11 @@ import {
   Phone,
   MapPin,
   ExternalLink,
+  UserPlus,
+  X,
 } from 'lucide-react'
 import Topbar, { SearchBox, TopIcons } from '../layout/Topbar.jsx'
-import { supabase } from '../lib/supabase.js'
+import { supabase, createIsolatedClient } from '../lib/supabase.js'
 import DateRangeFilter from '../components/DateRangeFilter.jsx'
 import { inRange, rangeLabel } from '../lib/dateRange.js'
 
@@ -136,6 +138,9 @@ export default function Riders() {
   const [range, setRange] = useState(null)
   const [preset, setPreset] = useState('month')
   const [searchQuery, setSearchQuery] = useState('')
+  const [showAdd, setShowAdd] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [form, setForm] = useState({ name: '', phone: '', email: '', password: '' })
 
   const load = useCallback(() => {
     // Orders with a rider assigned are always readable by the restaurant via the
@@ -169,6 +174,37 @@ export default function Riders() {
       supabase.removeChannel(channel)
     }
   }, [load])
+
+  // Create a rider login. Uses an isolated client so signUp() doesn't replace
+  // the admin's session; the handle_new_user trigger turns the auth user into a
+  // profiles row with role='rider' from the metadata below.
+  const addRider = async (e) => {
+    e.preventDefault()
+    const name = form.name.trim()
+    const email = form.email.trim()
+    const phone = form.phone.trim()
+    const password = form.password
+    if (!name || !email || password.length < 6) {
+      alert('Enter a name, email, and a password of at least 6 characters.')
+      return
+    }
+    setSaving(true)
+    const client = createIsolatedClient()
+    const { error } = await client.auth.signUp({
+      email,
+      password,
+      options: { data: { role: 'rider', full_name: name, phone } },
+    })
+    setSaving(false)
+    if (error) {
+      alert(`Could not add rider: ${error.message}`)
+      return
+    }
+    setShowAdd(false)
+    setForm({ name: '', phone: '', email: '', password: '' })
+    // Give the trigger a beat to insert the profile row, then refresh.
+    setTimeout(load, 600)
+  }
 
   const riders = buildRiders(ordersData.filter((o) => inRange(o.created_at, range)), roster, locs)
   const q = searchQuery.trim().toLowerCase()
@@ -204,6 +240,13 @@ export default function Riders() {
             value={searchQuery}
             onChange={setSearchQuery}
           />
+          <button
+            type="button"
+            onClick={() => setShowAdd(true)}
+            className="flex shrink-0 items-center gap-2 rounded-lg bg-brand px-4 py-2.5 text-sm font-semibold text-white hover:bg-brand-dark"
+          >
+            <UserPlus className="h-4 w-4" /> Add Rider
+          </button>
           <TopIcons />
         </div>
       </Topbar>
@@ -305,6 +348,100 @@ export default function Riders() {
           </table>
         </div>
       </div>
+
+      {/* Add Rider dialog */}
+      {showAdd && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <form onSubmit={addRider} className="w-full max-w-md rounded-2xl bg-white shadow-xl">
+            <div className="flex items-center justify-between border-b border-line p-5">
+              <div className="flex items-center gap-2">
+                <span className="rounded-lg bg-brand-light p-2 text-brand">
+                  <Bike className="h-5 w-5" />
+                </span>
+                <div>
+                  <h3 className="text-base font-bold text-ink">Add New Rider</h3>
+                  <p className="text-xs text-ink-soft">Creates a rider login for the delivery app.</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAdd(false)}
+                className="rounded p-1 text-ink-soft hover:bg-line-soft hover:text-ink"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-4 p-5">
+              <div>
+                <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-ink-soft">
+                  Full name
+                </label>
+                <input
+                  autoFocus
+                  value={form.name}
+                  onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                  placeholder="e.g. Ramesh Kumar"
+                  className="w-full rounded-lg border border-line px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-ink-soft">
+                  Phone
+                </label>
+                <input
+                  value={form.phone}
+                  onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
+                  placeholder="e.g. 98765 43210"
+                  className="w-full rounded-lg border border-line px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-ink-soft">
+                  Login email
+                </label>
+                <input
+                  type="email"
+                  value={form.email}
+                  onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
+                  placeholder="rider@example.com"
+                  className="w-full rounded-lg border border-line px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-ink-soft">
+                  Temporary password
+                </label>
+                <input
+                  type="text"
+                  value={form.password}
+                  onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
+                  placeholder="At least 6 characters"
+                  className="w-full rounded-lg border border-line px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none"
+                />
+                <p className="mt-1 text-[11px] text-ink-soft">Share these credentials with the rider so they can log in to the delivery app.</p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 border-t border-line p-5">
+              <button
+                type="button"
+                onClick={() => setShowAdd(false)}
+                className="rounded-lg border border-line px-4 py-2.5 text-xs font-semibold text-ink-soft hover:bg-canvas"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={saving}
+                className="flex items-center gap-1.5 rounded-lg bg-brand px-5 py-2.5 text-xs font-bold text-white hover:bg-brand-dark disabled:opacity-50"
+              >
+                <UserPlus className="h-4 w-4" /> {saving ? 'Adding…' : 'Add Rider'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </>
   )
 }
