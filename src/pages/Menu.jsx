@@ -187,6 +187,10 @@ export default function Menu() {
   const [photoUpdating, setPhotoUpd]  = useState(false)
   const photoInputRef                 = useRef(null)
 
+  // Turn off modal
+  const [turnOffTarget, setTurnOffTarget] = useState(null)
+  const [turnOffCustom, setTurnOffCustom] = useState('')
+
   /* ── Load products ── */
   const load = useCallback(() =>
     supabase.from('products').select('*').order('price', { ascending: false })
@@ -300,11 +304,51 @@ export default function Menu() {
   /* ── Availability toggle ── */
   const setAvailability = async (id, next) => {
     if (busy.has(id)) return
+    if (!next) {
+      // Trying to turn off -> show modal instead of doing it instantly
+      const p = products.find(x => x.id === id)
+      if (p) setTurnOffTarget(p)
+      return
+    }
+
+    // Turning back ON
     setBusy((prev) => new Set(prev).add(id))
-    setProducts((prev) => prev.map((p) => (p.id === id ? { ...p, is_available: next } : p)))
-    const { error } = await supabase.from('products').update({ is_available: next }).eq('id', id)
+    setProducts((prev) => prev.map((p) => (p.id === id ? { ...p, is_available: true, next_available_at: null } : p)))
+    const { error } = await supabase.from('products').update({ is_available: true, next_available_at: null }).eq('id', id)
     if (error) {
-      setProducts((prev) => prev.map((p) => (p.id === id ? { ...p, is_available: !next } : p)))
+      setProducts((prev) => prev.map((p) => (p.id === id ? { ...p, is_available: false } : p)))
+      alert(`Could not update availability: ${error.message}`)
+    }
+    setBusy((prev) => { const n = new Set(prev); n.delete(id); return n })
+  }
+
+  /* ── Confirm turn off with time ── */
+  const confirmTurnOff = async (option) => {
+    if (!turnOffTarget) return
+    const id = turnOffTarget.id
+    
+    let nextAvailableAt = null
+    const now = new Date()
+    if (option === '2_hrs') {
+      nextAvailableAt = new Date(now.getTime() + 2 * 60 * 60 * 1000).toISOString()
+    } else if (option === '4_hrs') {
+      nextAvailableAt = new Date(now.getTime() + 4 * 60 * 60 * 1000).toISOString()
+    } else if (option === 'tomorrow') {
+      // next day at the same time
+      nextAvailableAt = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString()
+    } else if (option === 'custom') {
+      if (!turnOffCustom) { alert('Please select a custom date/time'); return }
+      nextAvailableAt = new Date(turnOffCustom).toISOString()
+    }
+
+    setTurnOffTarget(null)
+    setTurnOffCustom('')
+    setBusy((prev) => new Set(prev).add(id))
+    
+    setProducts((prev) => prev.map((p) => (p.id === id ? { ...p, is_available: false, next_available_at: nextAvailableAt } : p)))
+    const { error } = await supabase.from('products').update({ is_available: false, next_available_at: nextAvailableAt }).eq('id', id)
+    if (error) {
+      setProducts((prev) => prev.map((p) => (p.id === id ? { ...p, is_available: true, next_available_at: null } : p)))
       alert(`Could not update availability: ${error.message}`)
     }
     setBusy((prev) => { const n = new Set(prev); n.delete(id); return n })
@@ -700,6 +744,56 @@ export default function Menu() {
               </button>
             </div>
           </form>
+        </div>
+      )}
+      {/* ════════════════════════════════════════
+          TURN OFF DISH MODAL
+      ════════════════════════════════════════ */}
+      {turnOffTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-sm rounded-2xl bg-white shadow-xl">
+            <div className="flex items-center justify-between border-b border-line p-5">
+              <div>
+                <h3 className="text-base font-bold text-ink">Turn Off Dish</h3>
+                <p className="text-xs text-ink-soft">{turnOffTarget.name}</p>
+              </div>
+              <button type="button" onClick={() => setTurnOffTarget(null)}
+                className="rounded p-1 text-ink-soft hover:bg-line-soft hover:text-ink"><X className="h-4 w-4" /></button>
+            </div>
+            
+            <div className="p-5 space-y-3">
+              <p className="text-sm text-ink-soft mb-2">When should this item be available again?</p>
+              
+              <button onClick={() => confirmTurnOff('2_hrs')}
+                className="w-full text-left rounded-lg border border-line px-4 py-3 text-sm font-semibold text-ink hover:border-brand hover:text-brand transition-colors">
+                2 Hrs
+              </button>
+              <button onClick={() => confirmTurnOff('4_hrs')}
+                className="w-full text-left rounded-lg border border-line px-4 py-3 text-sm font-semibold text-ink hover:border-brand hover:text-brand transition-colors">
+                4 Hrs
+              </button>
+              <button onClick={() => confirmTurnOff('tomorrow')}
+                className="w-full text-left rounded-lg border border-line px-4 py-3 text-sm font-semibold text-ink hover:border-brand hover:text-brand transition-colors">
+                Tomorrow
+              </button>
+              <button onClick={() => confirmTurnOff('indefinite')}
+                className="w-full text-left rounded-lg border border-line px-4 py-3 text-sm font-semibold text-ink hover:border-brand hover:text-brand transition-colors">
+                Temporary Closed / I will turn it on myself
+              </button>
+              
+              <div className="pt-2">
+                <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-ink-soft">Custom Date & Time</label>
+                <div className="flex gap-2">
+                  <input type="datetime-local" value={turnOffCustom} onChange={(e) => setTurnOffCustom(e.target.value)}
+                    className="flex-1 rounded-lg border border-line px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none" />
+                  <button onClick={() => confirmTurnOff('custom')} disabled={!turnOffCustom}
+                    className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark disabled:opacity-50">
+                    Apply
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </>
