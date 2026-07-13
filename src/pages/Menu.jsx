@@ -806,7 +806,7 @@ export default function Menu() {
               </button>
               <button onClick={() => confirmTurnOff('indefinite')}
                 className="w-full text-left rounded-lg border border-line px-4 py-3 text-sm font-semibold text-ink hover:border-brand hover:text-brand transition-colors">
-                Temporary Closed / I will turn it on myself
+                Temporarily Closed
               </button>
               
               <div className="pt-2">
