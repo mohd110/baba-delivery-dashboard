@@ -1,29 +1,70 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Plus,
   LayoutGrid,
   CookingPot,
   Beef,
   IceCream,
-  CupSoda,
+  Flame,
+  Soup,
+  Sandwich,
+  MoreHorizontal,
   TrendingUp,
   CheckCircle2,
   AlertTriangle,
   XCircle,
   X,
+  Upload,
+  ImagePlus,
+  Trash2,
 } from 'lucide-react'
 import Topbar, { SearchBox, TopIcons, Divider, ProfileChip } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
 
-// Category tabs actually filter the table. Each tab matches a dish by keywords
-// in its name; "All" shows everything so nothing is ever hidden.
+// Categories matching the customer app (+ other as catch-all)
+const CATEGORIES = ['biryani', 'fry', 'gravy', 'kebabs', 'tandoor', 'breads', 'dessert', 'other']
+
 const tabs = [
-  { label: 'All', icon: LayoutGrid, match: () => true },
-  { label: 'Biryani', icon: CookingPot, match: (n) => /biryani|rice|pulao/.test(n) },
-  { label: 'Kebabs', icon: Beef, match: (n) => /kebab|tikka|galouti|seekh|chicken|mutton|korma|curry|butter|paneer|masala|beef/.test(n) },
-  { label: 'Desserts', icon: IceCream, match: (n) => /brownie|tukda|kheer|dessert|gulab|halwa|ice ?cream|firni|phirni/.test(n) },
-  { label: 'Beverages', icon: CupSoda, match: (n) => /coffee|lassi|drink|juice|soda|tea|water|shake|cola|mojito/.test(n) },
+  { label: 'All',     key: 'all',     icon: LayoutGrid },
+  { label: 'Biryani', key: 'biryani', icon: CookingPot },
+  { label: 'Fry',     key: 'fry',     icon: Flame },
+  { label: 'Gravy',   key: 'gravy',   icon: Soup },
+  { label: 'Kebabs',  key: 'kebabs',  icon: Beef },
+  { label: 'Tandoor', key: 'tandoor', icon: Flame },
+  { label: 'Breads',  key: 'breads',  icon: Sandwich },
+  { label: 'Dessert', key: 'dessert', icon: IceCream },
+  { label: 'Other',   key: 'other',   icon: MoreHorizontal },
 ]
+
+// Guess category from name when DB field is null
+function guessCategory(name = '') {
+  const n = name.toLowerCase()
+  if (/biryani|pulao/.test(n)) return 'biryani'
+  if (/naan|roti|paratha|bread|bun/.test(n)) return 'breads'
+  if (/tandoor|tangdi|barra|lollipop|shami|afghani|peshawari|malai|aatishi/.test(n)) return 'tandoor'
+  if (/tikka/.test(n) && !/rice/.test(n)) return 'tandoor'
+  if (/kebab|galouti|adana/.test(n)) return 'kebabs'
+  if (/korma|stew|rogan|masala/.test(n)) return 'gravy'
+  if (/butter/.test(n) && !/bun|naan/.test(n)) return 'gravy'
+  if (/fry|kaleji|leg|chest/.test(n)) return 'fry'
+  if (/kheer|tukda|dessert|sweet|lassi/.test(n)) return 'dessert'
+  if (/rice/.test(n)) return 'biryani'
+  return 'other'
+}
+
+function categoryLabel(cat, name = '') {
+  const c = String(cat || '').toLowerCase()
+  if (c && CATEGORIES.includes(c)) return c.charAt(0).toUpperCase() + c.slice(1)
+  // fallback: guess
+  const g = guessCategory(name)
+  return g.charAt(0).toUpperCase() + g.slice(1)
+}
+
+function effectiveCategory(cat, name = '') {
+  const c = String(cat || '').toLowerCase()
+  if (c && CATEGORIES.includes(c)) return c
+  return guessCategory(name)
+}
 
 /* map a product name to one of our brand dish photos */
 function imgFor(name = '', photoUrl) {
@@ -31,20 +72,35 @@ function imgFor(name = '', photoUrl) {
   const n = name.toLowerCase()
   if (n.includes('mutton') || n.includes('korma')) return '/assets/mutton-korma.png'
   if (n.includes('paneer')) return '/assets/paneer-tikka.png'
-  if (n.includes('butter')) return '/assets/butter-chicken.png'
+  if (n.includes('butter') && n.includes('chicken')) return '/assets/butter-chicken.png'
   if (n.includes('tikka') || n.includes('aatishi')) return '/assets/chicken-aatishi.png'
   if (n.includes('kebab') || n.includes('galouti')) return '/assets/galouti-kebab.png'
   return '/assets/chicken-biryani.png'
 }
 
-function categoryFor(name = '') {
-  const n = name.toLowerCase()
-  if (n.includes('coffee') || n.includes('lassi') || n.includes('drink') || n.includes('juice'))
-    return 'BEVERAGE'
-  if (n.includes('brownie') || n.includes('tukda') || n.includes('kheer') || n.includes('dessert'))
-    return 'DESSERT'
-  if (n.includes('veg') || n.includes('paneer')) return 'VEG'
-  return 'MAIN COURSE'
+// Upload an image file to Supabase Storage and return its public URL.
+// Falls back to a base64 data URL if the bucket doesn't exist yet.
+async function uploadPhoto(file) {
+  const ext = file.name.split('.').pop()
+  const path = `dishes/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`
+
+  const { data, error } = await supabase.storage.from('menu-photos').upload(path, file, {
+    cacheControl: '3600',
+    upsert: false,
+    contentType: file.type,
+  })
+
+  if (error) {
+    // Bucket may not exist — store as data URL so the dish still saves
+    return new Promise((resolve) => {
+      const reader = new FileReader()
+      reader.onload = (e) => resolve(e.target.result)
+      reader.readAsDataURL(file)
+    })
+  }
+
+  const { data: urlData } = supabase.storage.from('menu-photos').getPublicUrl(data.path)
+  return urlData.publicUrl
 }
 
 function Toggle({ on, onChange, disabled }) {
@@ -68,16 +124,73 @@ function Toggle({ on, onChange, disabled }) {
   )
 }
 
+// ─── Photo Upload Widget ────────────────────────────────────────────────────
+function PhotoUploader({ value, onChange, uploading }) {
+  const inputRef = useRef(null)
+
+  return (
+    <div>
+      <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-ink-soft">
+        Photo (optional)
+      </label>
+      <div
+        onClick={() => !uploading && inputRef.current?.click()}
+        className={`relative flex h-28 w-full cursor-pointer flex-col items-center justify-center gap-2 overflow-hidden rounded-xl border-2 border-dashed transition-colors ${
+          value ? 'border-brand/40' : 'border-line hover:border-brand/50'
+        } bg-line-soft`}
+      >
+        {value ? (
+          <>
+            <img src={value} alt="preview" className="absolute inset-0 h-full w-full object-cover" />
+            <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 hover:opacity-100 transition-opacity">
+              <span className="flex items-center gap-1.5 rounded-lg bg-white/90 px-3 py-1.5 text-xs font-bold text-ink">
+                <Upload className="h-3.5 w-3.5" /> Change Photo
+              </span>
+            </div>
+          </>
+        ) : (
+          <>
+            <ImagePlus className="h-6 w-6 text-ink-soft" />
+            <span className="text-xs text-ink-soft">
+              {uploading ? 'Uploading…' : 'Click to upload dish photo'}
+            </span>
+          </>
+        )}
+      </div>
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0]
+          if (file) onChange(file)
+          e.target.value = ''
+        }}
+      />
+    </div>
+  )
+}
+
 export default function Menu() {
-  const [active, setActive] = useState('All')
+  const [active, setActive] = useState('all')
   const [products, setProducts] = useState([])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(() => new Set())
   const [searchQuery, setSearchQuery] = useState('')
-  const [restaurantId, setRestaurantId] = useState(null)
+
+  // Add dish dialog
   const [showAdd, setShowAdd] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [form, setForm] = useState({ name: '', price: '', description: '' })
+  const [photoUploading, setPhotoUploading] = useState(false)
+  const [form, setForm] = useState({
+    name: '', price: '', description: '', category: 'biryani', photoFile: null, photoPreview: null,
+  })
+
+  // Photo update for existing dish
+  const [photoTarget, setPhotoTarget] = useState(null) // product id being updated
+  const [photoUpdating, setPhotoUpdating] = useState(false)
+  const photoInputRef = useRef(null)
 
   const load = useCallback(
     () =>
@@ -95,28 +208,22 @@ export default function Menu() {
 
   useEffect(() => {
     load()
-    // Keep availability in sync if it's flipped elsewhere (another admin, the app).
     const channel = supabase
       .channel('menu-products')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, () => load())
       .subscribe()
-    return () => {
-      supabase.removeChannel(channel)
-    }
+    return () => { supabase.removeChannel(channel) }
   }, [load])
 
-  // Grab a restaurant id so newly-added dishes attach to the outlet.
-  useEffect(() => {
-    supabase
-      .from('restaurants')
-      .select('id')
-      .limit(1)
-      .then(({ data }) => {
-        if (data && data[0]) setRestaurantId(data[0].id)
-      })
-  }, [])
 
-  // Create a new dish in the products table.
+
+  // ── Handle photo selection for the "Add Dish" form ──
+  const handleFormPhoto = async (file) => {
+    const preview = URL.createObjectURL(file)
+    setForm((f) => ({ ...f, photoFile: file, photoPreview: preview }))
+  }
+
+  // ── Add a new dish ──
   const addDish = async (e) => {
     e.preventDefault()
     const name = form.name.trim()
@@ -126,20 +233,71 @@ export default function Menu() {
       return
     }
     setSaving(true)
-    const row = { name, price, description: form.description.trim() || null, is_available: true }
-    if (restaurantId) row.restaurant_id = restaurantId
-    const { error } = await supabase.from('products').insert(row)
+
+    // Upload photo first (if selected)
+    let photo_url = null
+    if (form.photoFile) {
+      setPhotoUploading(true)
+      photo_url = await uploadPhoto(form.photoFile)
+      setPhotoUploading(false)
+    }
+
+    const row = {
+      name,
+      price,
+      // Send empty string as fallback if description column is NOT NULL in DB
+      description: form.description.trim() || '',
+      is_available: true,
+      category: form.category,
+      ...(photo_url ? { photo_url } : {}),
+    }
+
+    // Try with category; if column missing, retry without
+    let { error } = await supabase.from('products').insert(row)
+    if (error && error.message?.toLowerCase().includes('category')) {
+      const { category: _c, ...rowWithout } = row
+      const retry = await supabase.from('products').insert(rowWithout)
+      error = retry.error
+    }
+
     setSaving(false)
     if (error) {
       alert(`Could not add dish: ${error.message}`)
       return
     }
     setShowAdd(false)
-    setForm({ name: '', price: '', description: '' })
+    setForm({ name: '', price: '', description: '', category: 'biryani', photoFile: null, photoPreview: null })
     load()
   }
 
-  // Flip one dish's availability with an optimistic update; roll back on failure.
+  // ── Update photo for an existing dish ──
+  const updateDishPhoto = async (file) => {
+    if (!photoTarget || !file) return
+    setPhotoUpdating(true)
+    const url = await uploadPhoto(file)
+    const { error } = await supabase.from('products').update({ photo_url: url }).eq('id', photoTarget)
+    setPhotoUpdating(false)
+    if (error) {
+      alert(`Could not update photo: ${error.message}`)
+    } else {
+      load()
+    }
+    setPhotoTarget(null)
+  }
+
+  // ── Delete a dish ──
+  const deleteDish = async (id, name) => {
+    if (!window.confirm(`Delete "${name}"? This cannot be undone.`)) return
+    // Optimistic remove
+    setProducts((prev) => prev.filter((p) => p.id !== id))
+    const { error } = await supabase.from('products').delete().eq('id', id)
+    if (error) {
+      alert(`Could not delete dish: ${error.message}`)
+      load() // restore on failure
+    }
+  }
+
+  // ── Availability toggle ──
   const setAvailability = async (id, next) => {
     if (busy.has(id)) return
     setBusy((prev) => new Set(prev).add(id))
@@ -150,14 +308,10 @@ export default function Menu() {
       setProducts((prev) => prev.map((p) => (p.id === id ? { ...p, is_available: !next } : p)))
       alert(`Could not update availability: ${error.message}`)
     }
-    setBusy((prev) => {
-      const n = new Set(prev)
-      n.delete(id)
-      return n
-    })
+    setBusy((prev) => { const n = new Set(prev); n.delete(id); return n })
   }
 
-  // Bulk action: mark every sold-out dish as available again.
+  // ── Bulk mark all available ──
   const [bulkBusy, setBulkBusy] = useState(false)
   const updateAllAvailable = async () => {
     const offIds = products.filter((p) => !p.is_available).map((p) => p.id)
@@ -174,28 +328,29 @@ export default function Menu() {
     setBulkBusy(false)
   }
 
-  // Table respects the active category tab + the search box.
-  const activeTab = tabs.find((t) => t.label === active) ?? tabs[0]
+  // ── Filter logic ──
   const q = searchQuery.trim().toLowerCase()
   const visibleProducts = products.filter((p) => {
-    const n = (p.name || '').toLowerCase()
-    if (!activeTab.match(n)) return false
+    if (active !== 'all') {
+      const eff = effectiveCategory(p.category, p.name)
+      if (eff !== active) return false
+    }
     if (!q) return true
+    const n = (p.name || '').toLowerCase()
     return (
       n.includes(q) ||
       (p.description || '').toLowerCase().includes(q) ||
-      categoryFor(p.name).toLowerCase().includes(q)
+      (p.category || '').toLowerCase().includes(q)
     )
   })
 
   const inStock = products.filter((p) => p.is_available).length
   const soldOut = products.filter((p) => !p.is_available).length
   const pad = (n) => String(n).padStart(2, '0')
-
   const avgPrice = products.length
     ? Math.round(products.reduce((s, p) => s + (p.price || 0), 0) / products.length)
     : 0
-  const categoryCount = new Set(products.map((p) => categoryFor(p.name))).size
+  const categoryCount = new Set(products.map((p) => effectiveCategory(p.category, p.name))).size
 
   const perf = [
     { label: 'TOTAL DISHES', value: String(products.length), sub: 'On the menu', subTone: 'text-ink-soft' },
@@ -204,9 +359,9 @@ export default function Menu() {
   ]
 
   const stock = [
-    { label: 'In Stock', count: pad(inStock), icon: CheckCircle2, tone: 'text-pos', bg: 'bg-pos-soft' },
-    { label: 'Low Stock', count: '00', icon: AlertTriangle, tone: 'text-[#b45309]', bg: 'bg-[#fef3c7]' },
-    { label: 'Sold Out', count: pad(soldOut), icon: XCircle, tone: 'text-brand', bg: 'bg-[#ffdad3]' },
+    { label: 'In Stock',  count: pad(inStock), icon: CheckCircle2, tone: 'text-pos',         bg: 'bg-pos-soft' },
+    { label: 'Low Stock', count: '00',         icon: AlertTriangle, tone: 'text-[#b45309]',  bg: 'bg-[#fef3c7]' },
+    { label: 'Sold Out',  count: pad(soldOut), icon: XCircle,       tone: 'text-brand',       bg: 'bg-[#ffdad3]' },
   ]
 
   return (
@@ -221,9 +376,22 @@ export default function Menu() {
         <div className="flex items-center gap-1">
           <TopIcons />
           <Divider />
-          <ProfileChip name="Spice Route - Downtown" sub="Main Hub" initials="SR" />
+          <ProfileChip name="Wali Baba Foods" sub="Restaurant Admin" initials="WB" />
         </div>
       </Topbar>
+
+      {/* Hidden file input for updating existing dish photos */}
+      <input
+        ref={photoInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0]
+          if (file) updateDishPhoto(file)
+          e.target.value = ''
+        }}
+      />
 
       <div className="space-y-6 p-8">
         {/* header */}
@@ -246,14 +414,14 @@ export default function Menu() {
         <div className="rounded-xl border border-line bg-white">
           {/* tabs */}
           <div className="flex items-center justify-between border-b border-line px-5">
-            <div className="flex items-center gap-6">
+            <div className="flex items-center gap-4 overflow-x-auto">
               {tabs.map((t) => {
-                const isActive = active === t.label
+                const isActive = active === t.key
                 return (
                   <button
-                    key={t.label}
-                    onClick={() => setActive(t.label)}
-                    className={`flex items-center gap-2 border-b-2 py-4 text-sm font-semibold transition-colors ${
+                    key={t.key}
+                    onClick={() => setActive(t.key)}
+                    className={`flex shrink-0 items-center gap-2 border-b-2 py-4 text-sm font-semibold transition-colors ${
                       isActive
                         ? 'border-brand text-brand'
                         : 'border-transparent text-ink-soft hover:text-ink'
@@ -274,20 +442,22 @@ export default function Menu() {
                 <th className="px-5 py-3 font-semibold">Category</th>
                 <th className="px-5 py-3 font-semibold">Price</th>
                 <th className="px-5 py-3 font-semibold">Status</th>
+                <th className="px-5 py-3 font-semibold">Photo</th>
                 <th className="px-5 py-3 font-semibold">Availability</th>
+                <th className="px-5 py-3 font-semibold">Delete</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-line-soft">
               {loading ? (
                 <tr>
-                  <td colSpan={5} className="px-5 py-12 text-center text-sm text-ink-soft">
+                  <td colSpan={7} className="px-5 py-12 text-center text-sm text-ink-soft">
                     Loading dishes…
                   </td>
                 </tr>
               ) : visibleProducts.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-5 py-12 text-center text-sm text-ink-soft">
-                    {q || active !== 'All' ? 'No dishes match this filter.' : 'No dishes found.'}
+                  <td colSpan={7} className="px-5 py-12 text-center text-sm text-ink-soft">
+                    {q || active !== 'all' ? 'No dishes match this filter.' : 'No dishes found.'}
                   </td>
                 </tr>
               ) : (
@@ -310,7 +480,7 @@ export default function Menu() {
                     </td>
                     <td className="px-5 py-4">
                       <span className="rounded bg-[#fdf0d5] px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-[#92710e]">
-                        {categoryFor(p.name)}
+                        {categoryLabel(p.category, p.name)}
                       </span>
                     </td>
                     <td className="px-5 py-4 text-sm font-semibold text-ink">₹{p.price}</td>
@@ -327,11 +497,34 @@ export default function Menu() {
                       </span>
                     </td>
                     <td className="px-5 py-4">
+                      <button
+                        type="button"
+                        disabled={photoUpdating && photoTarget === p.id}
+                        onClick={() => {
+                          setPhotoTarget(p.id)
+                          photoInputRef.current?.click()
+                        }}
+                        className="flex items-center gap-1.5 rounded-lg border border-line px-2.5 py-1.5 text-[11px] font-semibold text-ink-soft hover:border-brand hover:text-brand disabled:opacity-50 transition-colors"
+                      >
+                        <Upload className="h-3 w-3" />
+                        {photoUpdating && photoTarget === p.id ? 'Uploading…' : 'Update'}
+                      </button>
+                    </td>
+                    <td className="px-5 py-4">
                       <Toggle
                         on={p.is_available}
                         disabled={busy.has(p.id)}
                         onChange={() => setAvailability(p.id, !p.is_available)}
                       />
+                    </td>
+                    <td className="px-5 py-4">
+                      <button
+                        type="button"
+                        onClick={() => deleteDish(p.id, p.name)}
+                        className="flex items-center gap-1.5 rounded-lg border border-red-200 px-2.5 py-1.5 text-[11px] font-semibold text-red-400 hover:border-red-400 hover:bg-red-50 hover:text-red-600 transition-colors"
+                      >
+                        <Trash2 className="h-3 w-3" /> Delete
+                      </button>
                     </td>
                   </tr>
                 ))
@@ -360,7 +553,7 @@ export default function Menu() {
                   </p>
                   <p className="mt-2 text-lg font-bold text-ink">{p.value}</p>
                   <p className={`mt-1 flex items-center gap-1 text-xs font-semibold ${p.subTone}`}>
-                    {p.icon ? <p.icon className="h-3.5 w-3.5" /> : <TrendingUp className="h-3.5 w-3.5" />}
+                    <TrendingUp className="h-3.5 w-3.5" />
                     {p.sub}
                   </p>
                 </div>
@@ -395,15 +588,21 @@ export default function Menu() {
         </div>
       </div>
 
-      {/* Add New Dish dialog */}
+      {/* ── Add New Dish dialog ── */}
       {showAdd && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <form onSubmit={addDish} className="w-full max-w-md rounded-2xl bg-white shadow-xl">
+          <form
+            onSubmit={addDish}
+            className="w-full max-w-md rounded-2xl bg-white shadow-xl max-h-[90vh] overflow-y-auto"
+          >
             <div className="flex items-center justify-between border-b border-line p-5">
               <h3 className="text-base font-bold text-ink">Add New Dish</h3>
               <button
                 type="button"
-                onClick={() => setShowAdd(false)}
+                onClick={() => {
+                  setShowAdd(false)
+                  setForm({ name: '', price: '', description: '', category: 'biryani', photoFile: null, photoPreview: null })
+                }}
                 className="rounded p-1 text-ink-soft hover:bg-line-soft hover:text-ink"
               >
                 <X className="h-4 w-4" />
@@ -411,9 +610,17 @@ export default function Menu() {
             </div>
 
             <div className="space-y-4 p-5">
+              {/* Photo uploader */}
+              <PhotoUploader
+                value={form.photoPreview}
+                uploading={photoUploading}
+                onChange={handleFormPhoto}
+              />
+
+              {/* Name */}
               <div>
                 <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-ink-soft">
-                  Dish name
+                  Dish Name
                 </label>
                 <input
                   autoFocus
@@ -423,19 +630,41 @@ export default function Menu() {
                   className="w-full rounded-lg border border-line px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none"
                 />
               </div>
-              <div>
-                <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-ink-soft">
-                  Price (₹)
-                </label>
-                <input
-                  type="number"
-                  min="1"
-                  value={form.price}
-                  onChange={(e) => setForm((f) => ({ ...f, price: e.target.value }))}
-                  placeholder="e.g. 249"
-                  className="w-full rounded-lg border border-line px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none"
-                />
+
+              {/* Price + Category */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-ink-soft">
+                    Price (₹)
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={form.price}
+                    onChange={(e) => setForm((f) => ({ ...f, price: e.target.value }))}
+                    placeholder="e.g. 249"
+                    className="w-full rounded-lg border border-line px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-ink-soft">
+                    Category
+                  </label>
+                  <select
+                    value={form.category}
+                    onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))}
+                    className="w-full rounded-lg border border-line px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none"
+                  >
+                    {CATEGORIES.map((c) => (
+                      <option key={c} value={c}>
+                        {c.charAt(0).toUpperCase() + c.slice(1)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
+
+              {/* Description */}
               <div>
                 <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-ink-soft">
                   Description (optional)
@@ -453,17 +682,21 @@ export default function Menu() {
             <div className="flex items-center justify-end gap-3 border-t border-line p-5">
               <button
                 type="button"
-                onClick={() => setShowAdd(false)}
+                onClick={() => {
+                  setShowAdd(false)
+                  setForm({ name: '', price: '', description: '', category: 'biryani', photoFile: null, photoPreview: null })
+                }}
                 className="rounded-lg border border-line px-4 py-2.5 text-xs font-semibold text-ink-soft hover:bg-canvas"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                disabled={saving}
+                disabled={saving || photoUploading}
                 className="flex items-center gap-1.5 rounded-lg bg-brand px-5 py-2.5 text-xs font-bold text-white hover:bg-brand-dark disabled:opacity-50"
               >
-                <Plus className="h-4 w-4" /> {saving ? 'Adding…' : 'Add Dish'}
+                <Plus className="h-4 w-4" />
+                {photoUploading ? 'Uploading photo…' : saving ? 'Adding…' : 'Add Dish'}
               </button>
             </div>
           </form>
