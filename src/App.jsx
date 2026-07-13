@@ -37,7 +37,7 @@ export default function App() {
               </Protected>
             }
           >
-            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/" element={<Navigate to="/orders" replace />} />
             <Route path="/dashboard" element={<Overview />} />
             <Route path="/orders" element={<Orders />} />
             <Route path="/order-history" element={<OrderHistory />} />

@@ -20,7 +20,7 @@ export default function Login() {
       setError(error.message)
       return
     }
-    navigate('/dashboard', { replace: true })
+    navigate('/orders', { replace: true })
   }
 
   return (

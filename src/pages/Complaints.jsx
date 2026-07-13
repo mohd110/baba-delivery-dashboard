@@ -56,6 +56,15 @@ function typeMetaFor(category) {
 // cancelled/dismissed, or otherwise resolved.
 const OPEN_STATES = new Set(['open', 'pending', 'in_progress', 'new', 'reopened'])
 const CANCELLED_STATES = new Set(['cancelled', 'canceled', 'dismissed', 'rejected'])
+
+// The database enforces a CHECK constraint on complaints.status, but the exact
+// set of allowed values isn't known to the client (it was defined in Supabase,
+// not in this repo). Rather than hard-code one guess, we try a list of common
+// synonyms in order and keep the first the database accepts. The candidate
+// pools for "resolved" and "cancelled" are disjoint so whichever value lands
+// still reads back as the right state via normStatus/CANCELLED_STATES.
+const RESOLVE_CANDIDATES = ['resolved', 'closed', 'completed', 'done', 'solved']
+const CANCEL_CANDIDATES = ['cancelled', 'canceled', 'dismissed', 'rejected']
 function normStatus(status) {
   const s = String(status || 'open').toLowerCase()
   if (CANCELLED_STATES.has(s)) return 'cancelled'
@@ -164,15 +173,28 @@ export default function Complaints() {
 
   const selectedComplaint = complaints.find((c) => c.id === selectedComplaintId)
 
-  // Persist a status change to the database, then update local state. `dbStatus`
-  // is written to the row; `localStatus` is the normalised state we render with.
-  const updateStatus = async (id, dbStatus, localStatus, message) => {
+  // Persist a status change to the database, then update local state.
+  // `candidates` are the raw values we try writing (first accepted wins);
+  // `localStatus` is the normalised state we render with.
+  const updateStatus = async (id, candidates, localStatus, message) => {
     if (busy) return false
     setBusy(id)
-    const { error } = await supabase.from('complaints').update({ status: dbStatus }).eq('id', id)
+    let lastError = null
+    let saved = false
+    for (const dbStatus of candidates) {
+      const { error } = await supabase.from('complaints').update({ status: dbStatus }).eq('id', id)
+      if (!error) {
+        saved = true
+        break
+      }
+      lastError = error
+      // Only keep trying alternatives when the DB rejected the value itself
+      // (check-constraint violation). Bail out on anything else (auth, network).
+      if (!/check constraint|violates|invalid input/i.test(error.message)) break
+    }
     setBusy(null)
-    if (error) {
-      showToast(`Could not update complaint: ${error.message}`)
+    if (!saved) {
+      showToast(`Could not update complaint: ${lastError?.message ?? 'unknown error'}`, true)
       return false
     }
     setComplaints((prev) => prev.map((c) => (c.id === id ? { ...c, status: localStatus } : c)))
@@ -180,14 +202,14 @@ export default function Complaints() {
     return true
   }
 
-  const setResolved = (id, message) => updateStatus(id, 'resolved', 'resolved', message)
+  const setResolved = (id, message) => updateStatus(id, RESOLVE_CANDIDATES, 'resolved', message)
 
   const handleResolve = (id) => setResolved(id, 'Complaint marked as RESOLVED successfully.')
 
   const handleCancel = (id) => {
     if (busy) return
     if (!window.confirm('Cancel this complaint? It will be dismissed and removed from the active queue.')) return
-    updateStatus(id, 'cancelled', 'cancelled', 'Complaint cancelled and dismissed.')
+    updateStatus(id, CANCEL_CANDIDATES, 'cancelled', 'Complaint cancelled and dismissed.')
   }
 
   const handleRefund = (complaint) => {
@@ -199,8 +221,8 @@ export default function Complaints() {
     setResolved(complaint.id, 'Re-dispatch scheduled. A new active order has been queued in the kitchen.')
   }
 
-  const showToast = (msg) => {
-    setToastMessage(msg)
+  const showToast = (msg, isError = false) => {
+    setToastMessage({ text: msg, error: isError })
     setTimeout(() => {
       setToastMessage(null)
     }, 4000)
@@ -548,8 +570,12 @@ export default function Complaints() {
       {/* Floating Toast Notification */}
       {toastMessage && (
         <div className="fixed bottom-6 right-6 z-50 flex items-center gap-2 rounded-xl bg-ink text-white px-4 py-3.5 text-xs font-semibold shadow-xl border border-line-soft/10 animate-bounce">
-          <CheckCircle className="h-4 w-4 text-pos shrink-0" />
-          <span>{toastMessage}</span>
+          {toastMessage.error ? (
+            <AlertCircle className="h-4 w-4 text-brand shrink-0" />
+          ) : (
+            <CheckCircle className="h-4 w-4 text-pos shrink-0" />
+          )}
+          <span>{toastMessage.text}</span>
         </div>
       )}
     </div>

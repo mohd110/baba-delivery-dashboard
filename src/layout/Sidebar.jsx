@@ -97,6 +97,7 @@ export default function Sidebar() {
       <nav className="flex flex-1 flex-col items-center gap-1 overflow-y-auto px-2 pt-1">
         <div className="space-y-1">
           <NavItem to="/orders" label="Active Orders" icon={ShoppingBag} badge={activeCount} />
+          <NavItem to="/menu" label="Menu" icon={BookOpen} />
           <NavItem to="/order-history" label="Order History" icon={History} />
           <NavItem to="/reports" label="Reporting" icon={BarChart3} />
           <NavItem to="/complaints" label="Customer Complaints" icon={AlertTriangle} badge={complaintCount} />
@@ -133,16 +134,6 @@ export default function Sidebar() {
                 }
               >
                 <Store className="h-3.5 w-3.5" /> Outlets
-              </NavLink>
-              <NavLink
-                to="/menu"
-                className={({ isActive }) =>
-                  `flex items-center gap-3 rounded-lg px-3 py-2 text-xs transition-colors ${
-                    isActive ? 'bg-line-soft font-semibold text-brand' : 'text-ink-soft hover:bg-line-soft hover:text-ink'
-                  }`
-                }
-              >
-                <BookOpen className="h-3.5 w-3.5" /> Menu
               </NavLink>
               <NavLink
                 to="/riders"

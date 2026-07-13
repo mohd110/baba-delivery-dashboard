@@ -24,6 +24,7 @@ import {
 import Topbar, { TopIcons } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
 import { orderCode } from '../lib/format.js'
+import { useRestaurant, isAutoScheduleOn } from '../lib/restaurant.js'
 
 function imgFor(name = '', photoUrl) {
   if (photoUrl) return photoUrl
@@ -89,86 +90,235 @@ function escapeHtml(value) {
   )
 }
 
-// Kitchen Order Ticket: food + quantity only, never any prices.
-function buildKotHtml(order) {
-  const shortId = orderCode(order)
-  const placed = new Date(order.created_at).toLocaleString('en-IN')
-  const items = order.order_items ?? []
-  const rows = items
-    .map(
-      (it) => `
-        <tr>
-          <td class="qty">${it.quantity ?? 1}×</td>
-          <td class="name">${escapeHtml(it.products?.name || 'Item')}</td>
-        </tr>`
-    )
-    .join('')
+// Fixed outlet details printed on every ticket header.
+const OUTLET = {
+  name: 'WALI BABA FOODS',
+  gst: 'GST NO. 09ABDPI6142H1ZR',
+  address: ['GROUND FLOOR, SHOP NO 1', 'SOUTH X MALL KIDWAI NAGAR', 'KANPUR'],
+  fssai: 'FSSAI Lic No. 12722045001620',
+}
+
+// Code 128 (subset B) symbol patterns, index 0–106. Each entry is the run of
+// bar/space widths (bar first). Index 106 is the stop pattern (7 widths).
+const CODE128_PATTERNS = [
+  '212222', '222122', '222221', '121223', '121322', '131222', '122213', '122312', '132212', '221213',
+  '221312', '231212', '112232', '122132', '122231', '113222', '123122', '123221', '223211', '221132',
+  '221231', '213212', '223112', '312131', '311222', '321122', '321221', '312212', '322112', '322211',
+  '212123', '212321', '232121', '111323', '131123', '131321', '112313', '132113', '132311', '211313',
+  '231113', '231311', '112133', '112331', '132131', '113123', '113321', '133121', '313121', '211331',
+  '231131', '213113', '213311', '213131', '311123', '311321', '331121', '312113', '312311', '332111',
+  '314111', '221411', '431111', '111224', '111422', '121124', '121421', '141122', '141221', '112214',
+  '112412', '122114', '122411', '142112', '142211', '241211', '221114', '413111', '241112', '134111',
+  '111242', '121142', '121241', '114212', '124112', '124211', '411212', '421112', '421211', '212141',
+  '214121', '412121', '111143', '111341', '131141', '114113', '114311', '411113', '411311', '113141',
+  '114131', '311141', '411131', '211412', '211214', '211232', '2331112',
+]
+
+// Render `data` as an inline SVG Code 128-B barcode (no external library so it
+// works inside the print iframe). Falls back to empty string on bad input.
+function barcodeSvg(data, height = 46) {
+  const text = String(data ?? '').replace(/[^\x20-\x7e]/g, '')
+  if (!text) return ''
+  const values = [104] // Start Code B
+  let checksum = 104
+  for (let i = 0; i < text.length; i++) {
+    const v = text.charCodeAt(i) - 32
+    values.push(v)
+    checksum += v * (i + 1)
+  }
+  values.push(checksum % 103)
+  values.push(106) // Stop
+  let x = 10 // left quiet zone (modules)
+  let isBar = true
+  let rects = ''
+  for (const v of values) {
+    for (const ch of CODE128_PATTERNS[v]) {
+      const w = Number(ch)
+      if (isBar) rects += `<rect x="${x}" y="0" width="${w}" height="${height}" fill="#000"/>`
+      x += w
+      isBar = !isBar
+    }
+  }
+  const total = x + 10 // right quiet zone
+  return `<svg class="barcode" viewBox="0 0 ${total} ${height}" width="100%" height="${height}" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">${rects}</svg>`
+}
+
+const money = (n) => Number(n || 0).toFixed(2)
+const pad2 = (n) => String(n).padStart(2, '0')
+
+// dd/mm/yy
+function dateShort(d) {
+  return `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${String(d.getFullYear()).slice(-2)}`
+}
+// HH:MM (24h)
+function timeShort(d) {
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`
+}
+
+// Small numeric tokens derived from the order code (we have no separate
+// token/bill counters in the schema, so these are stable per order).
+function ticketNumbers(order) {
+  const digits = orderCode(order).replace(/\D/g, '')
+  return {
+    token: digits.slice(-3) || digits || '0',
+    bill: digits.slice(-6) || digits || '0',
+  }
+}
+
+// Header block shared by both tickets.
+function outletHead(showPaid) {
   return `
-    <div class="ticket">
-      <h1>KITCHEN KOT</h1>
-      <div class="meta">
-        <div class="big">${shortId}</div>
-        <div>${placed}</div>
-        <div class="up">${escapeHtml(order.order_type || 'delivery')}</div>
-        <div>${escapeHtml(order.delivery_address?.name || 'Customer')}</div>
-      </div>
-      <hr />
-      <table>
-        <tbody>${rows}</tbody>
-      </table>
-      <hr />
-      <div class="center small">— kitchen copy · no prices —</div>
+    <div class="head">
+      ${showPaid ? '<div class="paid">PAID</div>' : ''}
+      <div class="rname">${escapeHtml(OUTLET.name)}</div>
+      <div class="reg">${escapeHtml(OUTLET.gst)}</div>
+      ${OUTLET.address.map((l) => `<div class="reg">${escapeHtml(l)}</div>`).join('')}
+      <div class="reg">${escapeHtml(OUTLET.fssai)}</div>
     </div>`
 }
 
-// Customer bill: full itemised pricing breakdown.
-function buildBillHtml(order) {
-  const shortId = orderCode(order)
-  const placed = new Date(order.created_at).toLocaleString('en-IN')
-  const addr = order.delivery_address || {}
-  const items = order.order_items ?? []
-  const subtotal = items.reduce(
-    (s, it) => s + (it.price_at_order ?? 0) * (it.quantity ?? 1),
-    0
+// Barcode footer shared by both tickets.
+function barcodeFoot(order, caption) {
+  const code = orderCode(order)
+  return `
+    <div class="center small">${escapeHtml(caption)}</div>
+    <div class="barcodewrap">${barcodeSvg(code)}</div>
+    <div class="center small">${escapeHtml(code)}</div>`
+}
+
+// Try to surface any customer instruction stored on the order.
+function customerNote(order) {
+  return (
+    order.customer_notes ||
+    order.notes ||
+    order.special_instructions ||
+    order.delivery_address?.notes ||
+    ''
   )
+}
+
+// Kitchen Order Ticket — mirrors the thermal KOT layout.
+function buildKotHtml(order) {
+  const placed = new Date(order.created_at)
+  const prepBy = new Date(placed.getTime() + 15 * 60000)
+  const { token } = ticketNumbers(order)
+  const items = order.order_items ?? []
+  const type = (order.order_type || 'Delivery').replace(/\b\w/g, (c) => c.toUpperCase())
+  const paid = order.payment_status === 'verified'
   const rows = items
     .map((it) => {
       const lineTotal = (it.price_at_order ?? 0) * (it.quantity ?? 1)
       return `
         <tr>
-          <td class="qty">${it.quantity ?? 1}×</td>
           <td class="name">${escapeHtml(it.products?.name || 'Item')}</td>
-          <td class="amt">₹${lineTotal}</td>
+          <td class="note">--</td>
+          <td class="qty">${it.quantity ?? 1}</td>
+          <td class="amt">${money(lineTotal)}</td>
+        </tr>`
+    })
+    .join('')
+  const note = customerNote(order)
+  return `
+    <div class="ticket">
+      ${outletHead(false)}
+      <div class="kotmeta">
+        <div>${dateShort(placed)} ${timeShort(placed)}</div>
+        <div class="big">KOT - ${escapeHtml(token)}</div>
+        <div>Order : ${escapeHtml(orderCode(order))}</div>
+        <div class="big up">${escapeHtml(type)}</div>
+      </div>
+      <hr />
+      <div class="line"><b>Name :</b> ${escapeHtml(order.delivery_address?.name || 'Customer')}</div>
+      <hr />
+      <table>
+        <thead>
+          <tr>
+            <th class="name">Item</th>
+            <th class="note">Special Note</th>
+            <th class="qty">Qty.</th>
+            <th class="amt">Total</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <hr />
+      ${note ? `<div class="line"><b>Customer Notes:</b> ${escapeHtml(note)}</div>` : ''}
+      <div class="line"><b>Payment Status :</b> ${paid ? 'Online Paid' : 'Pending'}</div>
+      ${order.coupon_code ? `<div class="line"><b>Reward Type :</b> ${escapeHtml(order.coupon_code)}</div>` : ''}
+      <div class="line"><b>Prepare By :</b> ${dateShort(prepBy)} ${timeShort(prepBy)}</div>
+      <hr />
+      ${barcodeFoot(order, 'Scan to mark food ready')}
+    </div>`
+}
+// Customer bill — mirrors the thermal itemised bill layout.
+function buildBillHtml(order) {
+  const placed = new Date(order.created_at)
+  const addr = order.delivery_address || {}
+  const items = order.order_items ?? []
+  const { token, bill } = ticketNumbers(order)
+  const type = (order.order_type || 'Delivery').replace(/\b\w/g, (c) => c.toUpperCase())
+  const paid = order.payment_status === 'verified'
+  const subtotal = items.reduce((s, it) => s + (it.price_at_order ?? 0) * (it.quantity ?? 1), 0)
+  const totalQty = items.reduce((s, it) => s + (it.quantity ?? 1), 0)
+  const rows = items
+    .map((it) => {
+      const qty = it.quantity ?? 1
+      const unit = it.price_at_order ?? 0
+      return `
+        <tr>
+          <td class="name">${escapeHtml(it.products?.name || 'Item')}</td>
+          <td class="qty">${qty}</td>
+          <td class="price">${money(unit)}</td>
+          <td class="amt">${money(unit * qty)}</td>
         </tr>`
     })
     .join('')
   const discountRow =
     order.discount_amount > 0
-      ? `<div class="row"><span>Discount${
+      ? `<div class="row"><span>Discount Fixed${
           order.coupon_code ? ` (${escapeHtml(order.coupon_code)})` : ''
-        }</span><span>−₹${order.discount_amount}</span></div>`
+        }</span><span>(${money(order.discount_amount)})</span></div>`
+      : ''
+  const packagingRow =
+    order.delivery_fee > 0
+      ? `<div class="row"><span>Packaging Charge</span><span>${money(order.delivery_fee)}</span></div>`
       : ''
   return `
     <div class="ticket">
-      <h1>CUSTOMER BILL</h1>
-      <div class="meta">
-        <div class="big">${shortId}</div>
-        <div>${placed}</div>
-        <div>${escapeHtml(addr.name || 'Customer')}</div>
-        ${addr.phone ? `<div>${escapeHtml(addr.phone)}</div>` : ''}
-        ${addr.address ? `<div class="small">${escapeHtml(addr.address)}</div>` : ''}
-      </div>
+      ${outletHead(paid)}
+      <hr />
+      <div class="line"><b>Order No</b> [${escapeHtml(orderCode(order))}]</div>
+      <div class="line">Name: ${escapeHtml(addr.name || 'Customer')}</div>
+      ${addr.phone ? `<div class="line">Phone: ${escapeHtml(addr.phone)}</div>` : ''}
+      ${addr.address ? `<div class="line small">${escapeHtml(addr.address)}</div>` : ''}
+      <hr />
+      <div class="row"><span>Date: ${dateShort(placed)}</span><span><b>${escapeHtml(type)}</b></span></div>
+      <div class="row"><span>Cashier: biller</span><span>Bill No.: ${escapeHtml(bill)}</span></div>
+      <div class="line"><b>Token No.: ${escapeHtml(token)}</b></div>
       <hr />
       <table>
+        <thead>
+          <tr>
+            <th class="name">Item</th>
+            <th class="qty">Qty.</th>
+            <th class="price">Price</th>
+            <th class="amt">Amount</th>
+          </tr>
+        </thead>
         <tbody>${rows}</tbody>
       </table>
       <hr />
-      <div class="row"><span>Subtotal</span><span>₹${subtotal}</span></div>
-      <div class="row"><span>Delivery Fee</span><span>₹${order.delivery_fee ?? 0}</span></div>
+      <div class="row"><span>Total Qty: ${totalQty}</span><span>Sub Total ${money(subtotal)}</span></div>
+      <div class="center small">[Net Total inclusive of GST]</div>
       ${discountRow}
-      <div class="row total"><span>TOTAL</span><span>₹${order.total}</span></div>
+      ${packagingRow}
       <hr />
-      <div class="center small">Thank you! · Payment: UPI / Online</div>
+      <div class="grand">Grand Total ₹${money(order.total)}</div>
+      <div class="small">Paid via ${paid ? 'Online' : 'Pending Payment'}</div>
+      ${order.coupon_code ? `<hr /><div class="line"><b>Reward Type :</b> ${escapeHtml(order.coupon_code)}</div>` : ''}
+      <hr />
+      ${barcodeFoot(order, 'Scan to mark food ready')}
+      <div class="center small">Thanks</div>
     </div>`
 }
 
@@ -183,22 +333,31 @@ function printTickets(title, innerHtml) {
         <style>
           @page { size: 80mm auto; margin: 4mm; }
           * { box-sizing: border-box; }
-          body { font-family: 'Courier New', monospace; color: #000; margin: 0; }
+          body { font-family: Arial, 'Segoe UI', Helvetica, sans-serif; color: #000; margin: 0; font-size: 13px; line-height: 1.35; }
           .ticket { width: 100%; page-break-after: always; }
           .ticket:last-child { page-break-after: auto; }
-          h1 { text-align: center; font-size: 16px; margin: 0 0 6px; letter-spacing: 1px; }
           hr { border: none; border-top: 1px dashed #000; margin: 6px 0; }
-          .meta { text-align: center; font-size: 12px; line-height: 1.4; }
-          .meta .big { font-size: 15px; font-weight: bold; }
+          .head { text-align: center; line-height: 1.3; }
+          .head .paid { font-weight: bold; font-size: 13px; letter-spacing: 1px; }
+          .head .rname { font-weight: bold; font-size: 16px; margin: 1px 0; }
+          .head .reg { font-size: 10px; }
+          .kotmeta { text-align: center; line-height: 1.35; }
+          .kotmeta .big { font-weight: bold; font-size: 15px; }
           .up { text-transform: uppercase; }
-          table { width: 100%; border-collapse: collapse; font-size: 13px; }
+          .line { font-size: 12px; padding: 1px 0; }
+          table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 2px 0; }
+          th { text-align: left; font-weight: bold; border-bottom: 1px solid #000; padding: 2px 0; }
           td { padding: 2px 0; vertical-align: top; }
-          td.qty { width: 32px; font-weight: bold; }
-          td.amt { text-align: right; white-space: nowrap; }
-          .row { display: flex; justify-content: space-between; font-size: 13px; padding: 1px 0; }
-          .row.total { font-size: 15px; font-weight: bold; margin-top: 4px; }
+          th.qty, td.qty { width: 30px; text-align: center; }
+          th.note, td.note { width: 60px; text-align: center; }
+          th.price, td.price { width: 52px; text-align: right; white-space: nowrap; }
+          th.amt, td.amt { text-align: right; white-space: nowrap; width: 58px; }
+          .row { display: flex; justify-content: space-between; font-size: 12px; padding: 1px 0; }
+          .grand { text-align: center; font-weight: bold; font-size: 16px; margin: 2px 0; }
           .center { text-align: center; }
-          .small { font-size: 11px; }
+          .small { font-size: 10px; }
+          .barcodewrap { margin: 6px 0 2px; padding: 0 6px; }
+          .barcode { display: block; }
         </style>
       </head>
       <body>${innerHtml}</body>
@@ -306,6 +465,18 @@ export default function Orders() {
   const [cancelTarget, setCancelTarget] = useState(null)
   const [cancelReason, setCancelReason] = useState(CANCEL_REASONS[0])
   const [cancelNote, setCancelNote] = useState('')
+
+  // Restaurant open/closed state (shared with Outlets + Settings).
+  const { isOpen: storeOpen, loading: storeLoading, setOpen: setStoreOpen } = useRestaurant()
+  const [storeBusy, setStoreBusy] = useState(false)
+  const autoSchedule = isAutoScheduleOn()
+  const toggleStore = async () => {
+    if (storeBusy || storeLoading) return
+    setStoreBusy(true)
+    const { error } = await setStoreOpen(!storeOpen)
+    setStoreBusy(false)
+    if (error) alert(`Could not update restaurant status: ${error.message}`)
+  }
 
   // Load orders
   const load = useCallback(() => {
@@ -562,6 +733,35 @@ export default function Orders() {
           </span>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={storeOpen}
+            onClick={toggleStore}
+            disabled={storeBusy || storeLoading}
+            title={autoSchedule ? 'Auto open/close is on — set hours in Settings' : 'Toggle whether the restaurant is accepting orders'}
+            className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors disabled:opacity-60 ${
+              storeOpen
+                ? 'border-pos-soft bg-pos-soft text-pos-dark'
+                : 'border-brand/30 bg-[#ffdad3] text-brand'
+            }`}
+          >
+            <span
+              className={`flex h-4 w-7 items-center rounded-full p-0.5 transition-colors ${
+                storeOpen ? 'bg-pos' : 'bg-brand'
+              }`}
+            >
+              <span
+                className={`h-3 w-3 rounded-full bg-white shadow transition-transform ${
+                  storeOpen ? 'translate-x-3' : 'translate-x-0'
+                }`}
+              />
+            </span>
+            Restaurant {storeOpen ? 'Open' : 'Closed'}
+            {autoSchedule && (
+              <span className="rounded bg-white/60 px-1 text-[9px] uppercase tracking-wide">Auto</span>
+            )}
+          </button>
           <button
             type="button"
             onClick={sendTestNotification}
