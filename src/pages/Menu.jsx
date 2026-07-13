@@ -83,6 +83,27 @@ function Toggle({ on, onChange, disabled }) {
   )
 }
 
+/* Format Future Date */
+function formatFutureTime(isoString) {
+  if (!isoString) return ''
+  const d = new Date(isoString)
+  if (isNaN(d.getTime())) return ''
+  
+  const today = new Date()
+  const tomorrow = new Date(today)
+  tomorrow.setDate(tomorrow.getDate() + 1)
+  
+  const timeStr = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  
+  if (d.toDateString() === today.toDateString()) {
+    return `Today, ${timeStr}`
+  } else if (d.toDateString() === tomorrow.toDateString()) {
+    return `Tomorrow, ${timeStr}`
+  } else {
+    return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + `, ${timeStr}`
+  }
+}
+
 /* ── Photo Uploader widget ──────────────────────────── */
 function PhotoUploader({ value, onChange, uploading }) {
   const ref = useRef(null)
@@ -576,10 +597,17 @@ export default function Menu() {
                       )}
                     </td>
                     <td className="px-5 py-4">
-                      <span className={`flex items-center gap-1.5 text-sm font-medium ${p.is_available ? 'text-pos' : 'text-brand'}`}>
-                        <span className={`h-1.5 w-1.5 rounded-full ${p.is_available ? 'bg-pos' : 'bg-brand'}`} />
-                        {p.is_available ? 'Active' : 'Unavailable'}
-                      </span>
+                      <div className="flex flex-col">
+                        <span className={`flex items-center gap-1.5 text-sm font-medium ${p.is_available ? 'text-pos' : 'text-brand'}`}>
+                          <span className={`h-1.5 w-1.5 rounded-full ${p.is_available ? 'bg-pos' : 'bg-brand'}`} />
+                          {p.is_available ? 'Active' : 'Unavailable'}
+                        </span>
+                        {!p.is_available && p.next_available_at && (
+                          <span className="mt-1 text-[10px] font-semibold text-ink-soft">
+                            Until {formatFutureTime(p.next_available_at)}
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-5 py-4">
                       <button type="button" disabled={photoUpdating && photoTarget === p.id}
@@ -782,15 +810,21 @@ export default function Menu() {
               </button>
               
               <div className="pt-2">
-                <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-ink-soft">Custom Date & Time</label>
+                <label className="mb-1 flex items-center justify-between text-xs font-bold uppercase tracking-wide text-ink-soft">
+                  <span>Custom Date & Time</span>
+                  {turnOffCustom && <span className="text-brand lowercase normal-case">{formatFutureTime(turnOffCustom)}</span>}
+                </label>
                 <div className="flex gap-2">
                   <input type="datetime-local" value={turnOffCustom} onChange={(e) => setTurnOffCustom(e.target.value)}
                     className="flex-1 rounded-lg border border-line px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none" />
                   <button onClick={() => confirmTurnOff('custom')} disabled={!turnOffCustom}
-                    className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark disabled:opacity-50">
+                    className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark disabled:opacity-50 transition-colors">
                     Apply
                   </button>
                 </div>
+                <p className="mt-1.5 text-[11px] text-ink-soft">
+                  Select the exact date and time this item should become available again.
+                </p>
               </div>
             </div>
           </div>
