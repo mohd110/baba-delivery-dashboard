@@ -42,6 +42,39 @@ function effectiveCategory(cat, name = '') {
   return c || guessCategory(name)
 }
 
+// Guess veg / non-veg from a dish name when the DB has no is_veg flag. Veg
+// keywords win over non-veg ones (e.g. "Paneer Tikka" is veg despite "tikka").
+const VEG_RE = /paneer|veg\b|veggie|aloo|dal|daal|chana|chole|rajma|gobi|mushroom|palak|bhindi|jeera|soya|tofu|salad|raita|corn|mutter|matar|kaju/i
+const NONVEG_RE = /chicken|mutton|lamb|beef|fish|prawn|shrimp|egg|meat|keema|kheema|qeema|kebab|kabab|galouti|seekh|tikka|tangdi|tandoori|korma|qorma|murgh|gosht|biryani|nihari|haleem/i
+function guessVeg(name = '') {
+  const n = String(name).toLowerCase()
+  if (VEG_RE.test(n)) return true
+  if (NONVEG_RE.test(n)) return false
+  return false // menu is non-veg-forward; treat unknowns as non-veg
+}
+
+// Resolve a product's veg flag: the stored column wins, else infer from name.
+function productIsVeg(p) {
+  if (typeof p?.is_veg === 'boolean') return p.is_veg
+  return guessVeg(p?.name)
+}
+
+// The classic FSSAI food symbol: a bordered square with a centered dot,
+// green for veg and red for non-veg.
+function VegDot({ veg }) {
+  const color = veg ? '#16a34a' : '#dc2626'
+  return (
+    <span
+      className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[3px] border-[1.5px]"
+      style={{ borderColor: color }}
+      title={veg ? 'Veg' : 'Non-veg'}
+      aria-label={veg ? 'Veg' : 'Non-veg'}
+    >
+      <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: color }} />
+    </span>
+  )
+}
+
 function categoryLabel(cat, name = '', categories = DEFAULT_CATEGORIES) {
   const slug = effectiveCategory(cat, name)
   const found = categories.find((c) => c.slug === slug)
@@ -190,7 +223,7 @@ function VariantsEditor({ variants, onChange }) {
 /* ─────────────────────────────────────────────────────
    Main component
 ───────────────────────────────────────────────────── */
-const EMPTY_FORM = { name: '', price: '', description: '', category: 'biryani', photoFile: null, photoPreview: null, variants: [] }
+const EMPTY_FORM = { name: '', price: '', description: '', category: 'biryani', isVeg: false, photoFile: null, photoPreview: null, variants: [] }
 
 export default function Menu() {
   const [active, setActive]       = useState('all')
@@ -236,7 +269,7 @@ export default function Menu() {
 
   /* ── Load categories from DB ── */
   const loadCategories = useCallback(async () => {
-    const { data, error } = await supabase.from('menu_categories').select('name, slug').order('created_at')
+    const { data, error } = await supabase.from('menu_categories').select('name, slug').order('created_at', { ascending: false })
     if (!error && data && data.length > 0) setCategories(data)
   }, [])
 
@@ -264,6 +297,7 @@ export default function Menu() {
       price: p.price ?? '',
       description: p.description || '',
       category: effectiveCategory(p.category, p.name),
+      isVeg: productIsVeg(p),
       photoFile: null,
       photoPreview: p.photo_url || null,
       variants: Array.isArray(p.variants) ? p.variants : [],
@@ -282,11 +316,16 @@ export default function Menu() {
     if (form.photoFile) { setPhotoUp(true); photo_url = await uploadPhoto(form.photoFile); setPhotoUp(false) }
 
     const variants = form.variants.filter(v => v.name.trim()).map(v => ({ name: v.name.trim(), price: Number(v.price) || 0 }))
-    const row = { name, price, description: form.description.trim() || '', is_available: true, category: form.category, variants, ...(photo_url ? { photo_url } : {}) }
+    const row = { name, price, description: form.description.trim() || '', is_available: true, category: form.category, is_veg: form.isVeg, variants, ...(photo_url ? { photo_url } : {}) }
 
     let { error } = await supabase.from('products').insert(row)
+    // Retry without is_veg if that column hasn't been added to the table yet.
+    if (error && /is_veg|schema cache|column/i.test(error.message)) {
+      const { is_veg: _v, ...noVeg } = row
+      ;({ error } = await supabase.from('products').insert(noVeg))
+    }
     if (error?.message?.toLowerCase().includes('category')) {
-      const { category: _c, ...r2 } = row
+      const { category: _c, is_veg: _v2, ...r2 } = row
       ;({ error } = await supabase.from('products').insert(r2))
     }
     setSaving(false)
@@ -307,9 +346,14 @@ export default function Menu() {
     if (form.photoFile) { setPhotoUp(true); photo_url = await uploadPhoto(form.photoFile); setPhotoUp(false) }
 
     const variants = form.variants.filter(v => v.name.trim()).map(v => ({ name: v.name.trim(), price: Number(v.price) || 0 }))
-    const updates = { name, price, description: form.description.trim() || '', category: form.category, photo_url, variants }
+    const updates = { name, price, description: form.description.trim() || '', category: form.category, is_veg: form.isVeg, photo_url, variants }
 
-    const { error } = await supabase.from('products').update(updates).eq('id', editTarget.id)
+    let { error } = await supabase.from('products').update(updates).eq('id', editTarget.id)
+    // Retry without is_veg if that column hasn't been added to the table yet.
+    if (error && /is_veg|schema cache|column/i.test(error.message)) {
+      const { is_veg: _v, ...noVeg } = updates
+      ;({ error } = await supabase.from('products').update(noVeg).eq('id', editTarget.id))
+    }
     setSaving(false)
     if (error) { alert(`Could not save changes: ${error.message}`); return }
     setEditTarget(null); setForm(EMPTY_FORM); load()
@@ -412,9 +456,9 @@ export default function Menu() {
     const { error } = await supabase.from('menu_categories').insert({ name, slug })
     setSavingCat(false)
     if (error) {
-      // If table doesn't exist yet, add locally only
+      // If table doesn't exist yet, add locally only (newest first)
       if (error.message.includes('relation') || error.message.includes('does not exist')) {
-        setCategories((prev) => [...prev, { name, slug }])
+        setCategories((prev) => [{ name, slug }, ...prev])
       } else {
         alert(`Could not save category: ${error.message}`)
         setSavingCat(false)
@@ -491,6 +535,23 @@ export default function Menu() {
             className="w-full rounded-lg border border-line px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none">
             {categories.map((c) => <option key={c.slug} value={c.slug}>{c.name}</option>)}
           </select>
+        </div>
+      </div>
+      <div>
+        <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-ink-soft">Food Type</label>
+        <div className="flex gap-2">
+          <button type="button" onClick={() => setForm((f) => ({ ...f, isVeg: true }))}
+            className={`flex flex-1 items-center justify-center gap-2 rounded-lg border px-3 py-2 text-sm font-semibold transition-colors ${
+              form.isVeg ? 'border-pos bg-pos-soft text-pos-dark' : 'border-line text-ink-soft hover:border-ink-soft'
+            }`}>
+            <VegDot veg={true} /> Veg
+          </button>
+          <button type="button" onClick={() => setForm((f) => ({ ...f, isVeg: false }))}
+            className={`flex flex-1 items-center justify-center gap-2 rounded-lg border px-3 py-2 text-sm font-semibold transition-colors ${
+              !form.isVeg ? 'border-brand bg-brand-light text-brand' : 'border-line text-ink-soft hover:border-ink-soft'
+            }`}>
+            <VegDot veg={false} /> Non-veg
+          </button>
         </div>
       </div>
       <div>
@@ -597,7 +658,9 @@ export default function Menu() {
                       <div className="flex items-center gap-3">
                         <img src={imgFor(p.name, p.photo_url)} alt="" className="h-12 w-12 rounded-lg bg-line-2 object-cover" />
                         <div>
-                          <p className="text-sm font-semibold text-ink">{p.name}</p>
+                          <p className="flex items-center gap-1.5 text-sm font-semibold text-ink">
+                            <VegDot veg={productIsVeg(p)} /> {p.name}
+                          </p>
                           <p className="max-w-[220px] truncate text-xs text-ink-soft">{p.description || '—'}</p>
                         </div>
                       </div>

@@ -46,6 +46,109 @@ function elapsed(iso) {
   return `${Math.floor(hr / 24)}d`
 }
 
+// Prep countdown target: the moment the order is due to be ready. Uses the same
+// inputs the customer app reads (placed-at + eta_minutes), so the dashboard
+// countdown and the customer's ETA always agree. Null when no ETA is set.
+function readyByTs(order) {
+  if (!order || !(order.eta_minutes > 0)) return null
+  return new Date(order.created_at).getTime() + order.eta_minutes * 60000
+}
+
+// Format a signed remaining-time as M:SS, prefixing "+" once the timer is over.
+function fmtCountdown(ms) {
+  const over = ms < 0
+  const total = Math.floor(Math.abs(ms) / 1000)
+  const m = Math.floor(total / 60)
+  const s = total % 60
+  return `${over ? '+' : ''}${m}:${String(s).padStart(2, '0')}`
+}
+
+// Minutes added to eta_minutes when the manager snoozes an expired prep timer.
+const SNOOZE_MIN = 5
+// How long the card blinks and the buzzer sounds after a timer runs out.
+const ALARM_MS = 60000
+
+// --- Prep-timer buzzer (Web Audio, no asset) -------------------------------
+// A short repeating square-wave beep that runs while any prep timer is expired.
+let _audioCtx = null
+let _buzzTimer = null
+function startBuzzer() {
+  if (_buzzTimer) return
+  const beep = () => {
+    try {
+      if (!_audioCtx) {
+        const Ctx = window.AudioContext || window.webkitAudioContext
+        if (!Ctx) return
+        _audioCtx = new Ctx()
+      }
+      const ctx = _audioCtx
+      if (ctx.state === 'suspended') ctx.resume()
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.type = 'square'
+      osc.frequency.value = 880
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime)
+      gain.gain.exponentialRampToValueAtTime(0.28, ctx.currentTime + 0.02)
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.32)
+      osc.connect(gain).connect(ctx.destination)
+      osc.start()
+      osc.stop(ctx.currentTime + 0.34)
+    } catch {
+      /* audio unavailable — silently ignore */
+    }
+  }
+  beep()
+  _buzzTimer = setInterval(beep, 800)
+}
+function stopBuzzer() {
+  if (_buzzTimer) {
+    clearInterval(_buzzTimer)
+    _buzzTimer = null
+  }
+}
+
+// Veg / non-veg detection. No dedicated column exists, so infer from the dish
+// name the same way the app infers category and image. Veg keywords win over
+// non-veg ones (e.g. "Paneer Tikka" is veg despite "tikka").
+const VEG_RE = /paneer|veg\b|veggie|aloo|dal|daal|chana|chole|rajma|gobi|mushroom|palak|bhindi|jeera|soya|tofu|salad|raita|corn|mutter|matar|kaju/i
+const NONVEG_RE = /chicken|mutton|lamb|beef|fish|prawn|shrimp|egg|meat|keema|kheema|qeema|kebab|kabab|galouti|seekh|tikka|tangdi|tandoori|korma|qorma|murgh|gosht|biryani|nihari|haleem|butter chicken|masala chicken/i
+function isVegItem(name = '') {
+  const n = String(name).toLowerCase()
+  if (VEG_RE.test(n)) return true
+  if (NONVEG_RE.test(n)) return false
+  return false // menu is non-veg-forward; treat unknowns as non-veg
+}
+
+// The classic FSSAI food symbol: a bordered square with a centered dot,
+// green for veg and red for non-veg.
+function VegMark({ veg, className = '' }) {
+  const color = veg ? '#16a34a' : '#dc2626'
+  return (
+    <span
+      className={`inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[3px] border-[1.5px] ${className}`}
+      style={{ borderColor: color }}
+      title={veg ? 'Veg' : 'Non-veg'}
+      aria-label={veg ? 'Veg' : 'Non-veg'}
+    >
+      <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: color }} />
+    </span>
+  )
+}
+
+// Render an order code with its "BB" prefix in brand red (uppercased) and the
+// remainder in ink black.
+function OrderIdLabel({ order, className = '' }) {
+  const code = orderCode(order)
+  const m = /^bb(.*)$/i.exec(code)
+  if (!m) return <span className={className}>{code}</span>
+  return (
+    <span className={className}>
+      <span className="text-brand">BB</span>
+      <span className="text-ink">{m[1]}</span>
+    </span>
+  )
+}
+
 // Line total for a single order item (unit price × quantity).
 function lineTotal(it) {
   return (it.price_at_order ?? 0) * (it.quantity ?? 1)
@@ -474,6 +577,8 @@ export default function Orders() {
   const [acceptTarget, setAcceptTarget] = useState(null)
   const [etaMinutes, setEtaMinutes] = useState(DEFAULT_ETA)
   const [etaCustom, setEtaCustom] = useState('')
+  // Ticks once per second to drive the live prep-time countdowns.
+  const [nowTs, setNowTs] = useState(() => Date.now())
 
   // Restaurant open/closed state (shared with Outlets + Settings).
   const { isOpen: storeOpen, loading: storeLoading, setOpen: setStoreOpen } = useRestaurant()
@@ -525,6 +630,12 @@ export default function Orders() {
     }
   }, [load])
 
+  // Drive the live prep-time countdowns (re-render every second).
+  useEffect(() => {
+    const id = setInterval(() => setNowTs(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [])
+
   // Get active tab assignment for each order
   const getTabForOrder = (order) => {
     if (order.status === 'pending') return 'pending'
@@ -565,6 +676,24 @@ export default function Orders() {
   // Selected order details — only within the current tab so the right panel
   // clears automatically when you switch to a tab that doesn't contain it.
   const selectedOrder = filteredOrders.find(o => o.id === selectedOrderId)
+
+  // Preparing orders whose prep countdown has run out (ready-by time passed),
+  // most-overdue first. These drive the blink, buzzer and mark-ready prompt.
+  const expiredOrders = activeOrders
+    .filter((o) => o.status === 'preparing' && readyByTs(o) != null && nowTs >= readyByTs(o))
+    .sort((a, b) => readyByTs(a) - readyByTs(b))
+  // The order shown in the mark-ready prompt (the most overdue one).
+  const alarmOrder = expiredOrders[0] || null
+  // Blink + buzz only for the first minute after a timer runs out.
+  const alarmActive = alarmOrder != null && nowTs - readyByTs(alarmOrder) < ALARM_MS
+
+  // Run the buzzer while an alarm is active; stop as soon as it clears.
+  useEffect(() => {
+    if (alarmActive) startBuzzer()
+    else stopBuzzer()
+  }, [alarmActive])
+  // Belt-and-braces: silence the buzzer if the page unmounts.
+  useEffect(() => () => stopBuzzer(), [])
 
   // Prime the checklist once per selected order, as soon as its data is
   // available. Pending orders start with every in-stock item checked (only
@@ -659,6 +788,28 @@ export default function Orders() {
     }
     setAcceptTarget(null)
     await advance(order, { etaMinutes: Math.round(mins) })
+  }
+
+  // Snooze an expired prep timer by adding 5 minutes. Writing eta_minutes back
+  // to the DB pushes the new ready-by time to the customer app automatically.
+  const addPrepTime = async (order) => {
+    if (!order) return
+    const prev = order.eta_minutes || 0
+    const next = prev + SNOOZE_MIN
+    patchLocal(order.id, { eta_minutes: next })
+    const { error } = await supabase
+      .from('orders')
+      .update({ eta_minutes: next })
+      .eq('id', order.id)
+    if (error) {
+      patchLocal(order.id, { eta_minutes: prev })
+      alert(`Could not extend prep time: ${error.message}`)
+      return
+    }
+    notifyCustomer(order, {
+      title: '⏱️ A little more time',
+      body: `Your order needs ${SNOOZE_MIN} more minutes — thanks for your patience!`,
+    })
   }
 
   // Open the cancellation dialog for an order (resets the reason picker).
@@ -920,18 +1071,26 @@ export default function Orders() {
               filteredOrders.map((o) => {
                 const items = o.order_items ?? []
                 const isSelected = o.id === selectedOrderId
-                const shortId = orderCode(o)
                 const elapsedMin = elapsed(o.created_at)
 
                 // Highlight cards that are running late in kitchen
                 const minutes = parseInt(elapsedMin) || 0
                 const isLate = activeTab === 'preparing' && minutes >= 15
 
+                // Live prep countdown for preparing orders.
+                const isPreparing = activeTab === 'preparing' && o.status === 'preparing'
+                const readyTs = readyByTs(o)
+                const remainingMs = readyTs != null ? readyTs - nowTs : null
+                const isExpired = isPreparing && remainingMs != null && remainingMs <= 0
+                const isAlarming = isExpired && nowTs - readyTs < ALARM_MS
+
                 return (
                   <div
                     key={o.id}
                     onClick={() => setSelectedOrderId(o.id)}
                     className={`group relative flex cursor-pointer flex-col gap-2 p-4 text-left transition-all hover:bg-canvas/50 ${
+                      isAlarming ? 'animate-alarm-row ' : ''
+                    }${
                       isSelected
                         ? 'border-l-4 border-brand bg-brand/5'
                         : 'border-l-4 border-transparent'
@@ -939,9 +1098,9 @@ export default function Orders() {
                   >
                     {/* Order ID (number) + elapsed time */}
                     <div className="flex items-center justify-between gap-2">
-                      <span className="flex min-w-0 items-center gap-1.5 text-sm font-bold text-ink group-hover:text-brand transition-colors">
+                      <span className="flex min-w-0 items-center gap-1.5 text-sm font-bold">
                         <Hash className="h-3.5 w-3.5 shrink-0 text-ink-soft" />
-                        <span className="truncate">{shortId}</span>
+                        <OrderIdLabel order={o} className="truncate" />
                       </span>
                       <div className="flex shrink-0 items-center gap-1.5">
                         <Clock className={`h-3 w-3 ${isLate ? 'text-brand animate-pulse' : 'text-ink-soft'}`} />
@@ -999,17 +1158,33 @@ export default function Orders() {
                         )}
                       </div>
                       <div className="flex shrink-0 items-center gap-2">
-                        {/* Inline Mark Ready button shown directly on preparing-tab cards */}
-                        {activeTab === 'preparing' && o.status === 'preparing' && (
-                          <button
-                            type="button"
-                            disabled={busy === o.id}
-                            onClick={(e) => { e.stopPropagation(); advance(o) }}
-                            className="flex items-center gap-1 rounded-lg bg-pos px-2.5 py-1 text-[10px] font-bold text-white shadow-sm hover:bg-pos-dark transition-colors disabled:opacity-50"
-                          >
-                            <CheckCircle2 className="h-3 w-3" /> Mark Ready
-                          </button>
-                        )}
+                        {/* Prep countdown + inline Mark Ready on preparing cards */}
+                        {isPreparing ? (
+                          <div className="flex flex-col items-end gap-1">
+                            {remainingMs != null && (
+                              <span
+                                className={`flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-bold tabular-nums ${
+                                  isExpired
+                                    ? isAlarming
+                                      ? 'animate-alarm'
+                                      : 'bg-brand-light text-brand'
+                                    : 'border border-line bg-canvas text-ink'
+                                }`}
+                              >
+                                <Clock className="h-2.5 w-2.5" />
+                                {isExpired ? `Overdue ${fmtCountdown(remainingMs)}` : fmtCountdown(remainingMs)}
+                              </span>
+                            )}
+                            <button
+                              type="button"
+                              disabled={busy === o.id}
+                              onClick={(e) => { e.stopPropagation(); advance(o) }}
+                              className="flex items-center gap-1 rounded-lg bg-pos px-2.5 py-1 text-[10px] font-bold text-white shadow-sm hover:bg-pos-dark transition-colors disabled:opacity-50"
+                            >
+                              <CheckCircle2 className="h-3 w-3" /> Mark Ready
+                            </button>
+                          </div>
+                        ) : null}
                         <span className="text-sm font-bold text-ink">₹{o.total}</span>
                       </div>
                     </div>
@@ -1030,7 +1205,7 @@ export default function Orders() {
                   <div>
                     <div className="flex items-center gap-3">
                       <h2 className="text-xl font-bold text-ink">
-                        Order {orderCode(selectedOrder)}
+                        Order <OrderIdLabel order={selectedOrder} />
                       </h2>
                       <StatusBadge status={selectedOrder.status} />
                       {selectedOrder.eta_minutes > 0 &&
@@ -1155,11 +1330,12 @@ export default function Orders() {
                               <div className={`flex h-5 w-5 items-center justify-center rounded border transition-all ${
                                 isChecked
                                   ? 'bg-pos border-pos text-white'
-                                  : 'border-line group-hover:border-ink-soft'
+                                  : 'border-red-500 group-hover:border-red-600'
                               }`}>
                                 {isChecked && <Check className="h-3.5 w-3.5 stroke-[3]" />}
                               </div>
                               <div className="flex items-center gap-2">
+                                <VegMark veg={isVegItem(it.products?.name)} />
                                 <img
                                   src={imgFor(it.products?.name, it.products?.photo_url)}
                                   alt=""
@@ -1172,7 +1348,7 @@ export default function Orders() {
                                     isUnavailable
                                       ? 'text-red-600 line-through decoration-red-300'
                                       : isChecked
-                                      ? 'text-ink-soft line-through decoration-line-2'
+                                      ? 'text-ink-soft'
                                       : 'text-ink'
                                   }`}>
                                     {it.quantity} × {it.products?.name || 'Item'}
@@ -1398,6 +1574,51 @@ export default function Orders() {
           )}
         </div>
       </div>
+
+      {/* Prep-timer expired: buzzer + prompt to mark ready or add 5 minutes */}
+      {alarmOrder && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-center gap-3 border-b border-line bg-brand-light p-5">
+              <span className={`rounded-xl bg-brand p-2.5 text-white ${alarmActive ? 'animate-pulse' : ''}`}>
+                <Clock className="h-6 w-6" />
+              </span>
+              <div>
+                <h3 className="text-lg font-bold text-brand">Time&apos;s up!</h3>
+                <p className="text-xs font-semibold text-ink-soft">
+                  Order <OrderIdLabel order={alarmOrder} /> is overdue by{' '}
+                  {fmtCountdown(readyByTs(alarmOrder) - nowTs).replace('+', '')}
+                </p>
+              </div>
+            </div>
+            <div className="p-5">
+              <p className="text-sm text-ink-soft">
+                {alarmOrder.delivery_address?.name || 'The customer'}&apos;s order has hit its prep
+                time. Mark it ready now, or add {SNOOZE_MIN} more minutes — the customer&apos;s ETA
+                updates automatically.
+              </p>
+              <div className="mt-5 flex flex-col gap-2 sm:flex-row">
+                <button
+                  type="button"
+                  disabled={busy === alarmOrder.id}
+                  onClick={() => advance(alarmOrder)}
+                  className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-pos px-4 py-3 text-sm font-bold text-white shadow-sm hover:bg-pos-dark transition-colors disabled:opacity-50"
+                >
+                  <CheckCircle2 className="h-4 w-4" /> Mark Ready
+                </button>
+                <button
+                  type="button"
+                  disabled={busy === alarmOrder.id}
+                  onClick={() => addPrepTime(alarmOrder)}
+                  className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-line bg-white px-4 py-3 text-sm font-bold text-ink hover:bg-canvas transition-colors disabled:opacity-50"
+                >
+                  <Clock className="h-4 w-4" /> +{SNOOZE_MIN} min
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Cancellation reason dialog */}
       {acceptTarget && (
