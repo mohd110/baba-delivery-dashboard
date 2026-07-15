@@ -3,6 +3,7 @@ import {
   Plus, LayoutGrid, CookingPot, Beef, IceCream, Flame, Soup,
   Sandwich, TrendingUp, CheckCircle2, AlertTriangle,
   XCircle, X, Upload, ImagePlus, Trash2, Pencil, Tag,
+  ChevronLeft, ChevronRight,
 } from 'lucide-react'
 import Topbar, { SearchBox, TopIcons, Divider, ProfileChip } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
@@ -93,15 +94,17 @@ function imgFor(name = '', photoUrl) {
   return '/assets/chicken-biryani.png'
 }
 
-/* Upload to Supabase Storage, fallback to base64 */
+/* Upload a dish photo to the `menu-photos` storage bucket and return its public
+ * URL. We deliberately do NOT fall back to a base64 data-URI: storing image
+ * bytes inline in the products row bloats every `select('*')` and wrecks menu
+ * query timing. On failure we throw so the caller can surface the error and
+ * abort — the row only ever holds a short bucket URL. */
 async function uploadPhoto(file) {
-  const ext = file.name.split('.').pop()
+  const ext = (file.name.split('.').pop() || 'jpg').toLowerCase()
   const path = `dishes/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`
   const { data, error } = await supabase.storage
     .from('menu-photos').upload(path, file, { cacheControl: '3600', upsert: false, contentType: file.type })
-  if (error) {
-    return new Promise((res) => { const r = new FileReader(); r.onload = (e) => res(e.target.result); r.readAsDataURL(file) })
-  }
+  if (error) throw new Error(error.message || 'Photo upload failed')
   const { data: urlData } = supabase.storage.from('menu-photos').getPublicUrl(data.path)
   return urlData.publicUrl
 }
@@ -225,12 +228,19 @@ function VariantsEditor({ variants, onChange }) {
 ───────────────────────────────────────────────────── */
 const EMPTY_FORM = { name: '', price: '', description: '', category: 'biryani', isVeg: false, photoFile: null, photoPreview: null, variants: [] }
 
+// Show at most this many dishes per page. Pagination is client-side: the menu
+// is small and (now that photos live in the `menu-photos` bucket) each row is
+// tiny, so one slim query keeps category-guessing, search and the stat cards
+// consistent while we render only a 15-row window at a time.
+const PAGE_SIZE = 15
+
 export default function Menu() {
   const [active, setActive]       = useState('all')
   const [products, setProducts]   = useState([])
   const [loading, setLoading]     = useState(true)
   const [busy, setBusy]           = useState(() => new Set())
   const [searchQuery, setSearch]  = useState('')
+  const [page, setPage]           = useState(1)   // 1-indexed page for the dish table
 
   // Dynamic categories from DB
   const [categories, setCategories] = useState(DEFAULT_CATEGORIES)
@@ -313,7 +323,12 @@ export default function Menu() {
     setSaving(true)
 
     let photo_url = null
-    if (form.photoFile) { setPhotoUp(true); photo_url = await uploadPhoto(form.photoFile); setPhotoUp(false) }
+    if (form.photoFile) {
+      setPhotoUp(true)
+      try { photo_url = await uploadPhoto(form.photoFile) }
+      catch (err) { setPhotoUp(false); setSaving(false); alert(`Could not upload photo: ${err.message}`); return }
+      setPhotoUp(false)
+    }
 
     const variants = form.variants.filter(v => v.name.trim()).map(v => ({ name: v.name.trim(), price: Number(v.price) || 0 }))
     const row = { name, price, description: form.description.trim() || '', is_available: true, category: form.category, is_veg: form.isVeg, variants, ...(photo_url ? { photo_url } : {}) }
@@ -343,7 +358,12 @@ export default function Menu() {
     setSaving(true)
 
     let photo_url = editTarget.photo_url
-    if (form.photoFile) { setPhotoUp(true); photo_url = await uploadPhoto(form.photoFile); setPhotoUp(false) }
+    if (form.photoFile) {
+      setPhotoUp(true)
+      try { photo_url = await uploadPhoto(form.photoFile) }
+      catch (err) { setPhotoUp(false); setSaving(false); alert(`Could not upload photo: ${err.message}`); return }
+      setPhotoUp(false)
+    }
 
     const variants = form.variants.filter(v => v.name.trim()).map(v => ({ name: v.name.trim(), price: Number(v.price) || 0 }))
     const updates = { name, price, description: form.description.trim() || '', category: form.category, is_veg: form.isVeg, photo_url, variants }
@@ -363,7 +383,9 @@ export default function Menu() {
   const updateDishPhoto = async (file) => {
     if (!photoTarget || !file) return
     setPhotoUpd(true)
-    const url = await uploadPhoto(file)
+    let url
+    try { url = await uploadPhoto(file) }
+    catch (err) { setPhotoUpd(false); setPhotoTarget(null); alert(`Could not upload photo: ${err.message}`); return }
     const { error } = await supabase.from('products').update({ photo_url: url }).eq('id', photoTarget)
     setPhotoUpd(false)
     if (error) alert(`Could not update photo: ${error.message}`)
@@ -480,6 +502,17 @@ export default function Menu() {
     return n.includes(q) || (p.description || '').toLowerCase().includes(q) || (p.category || '').toLowerCase().includes(q)
   })
 
+  /* ── Pagination (client-side, 15 per page) ── */
+  const pageCount    = Math.max(1, Math.ceil(visibleProducts.length / PAGE_SIZE))
+  const safePage     = Math.min(page, pageCount)          // clamp if list shrank
+  const pageStart    = (safePage - 1) * PAGE_SIZE
+  const pagedProducts = visibleProducts.slice(pageStart, pageStart + PAGE_SIZE)
+  // The filter handlers reset to page 1 when the category/search changes. All
+  // reads use `safePage`, so a page that falls off the end after a delete still
+  // renders correctly without needing to write state back.
+  const selectCategory = (slug) => { setActive(slug); setPage(1) }
+  const handleSearch   = (v) => { setSearch(v); setPage(1) }
+
   const inStock  = products.filter((p) => p.is_available).length
   const soldOut  = products.filter((p) => !p.is_available).length
   // Item count per category slug, for the tab badges.
@@ -575,7 +608,7 @@ export default function Menu() {
     <>
       <Topbar>
         <SearchBox placeholder="Search dishes, prices, or categories..." className="w-full max-w-[420px]"
-          value={searchQuery} onChange={setSearch} />
+          value={searchQuery} onChange={handleSearch} />
         <div className="flex items-center gap-1">
           <TopIcons /><Divider />
           <ProfileChip name="Wali Baba Foods" sub="Restaurant Admin" initials="WB" />
@@ -611,7 +644,7 @@ export default function Menu() {
           <div className="flex items-center border-b border-line px-5">
             <div className="flex items-center gap-4 overflow-x-auto">
               {/* All tab */}
-              <button onClick={() => setActive('all')}
+              <button onClick={() => selectCategory('all')}
                 className={`flex shrink-0 items-center gap-2 border-b-2 py-4 text-sm font-semibold transition-colors ${active === 'all' ? 'border-brand text-brand' : 'border-transparent text-ink-soft hover:text-ink'}`}>
                 <LayoutGrid className="h-4 w-4" /> All
                 <CountBadge count={products.length} active={active === 'all'} />
@@ -620,7 +653,7 @@ export default function Menu() {
               {categories.map((cat) => {
                 const Icon = catIcon(cat.slug)
                 return (
-                  <button key={cat.slug} onClick={() => setActive(cat.slug)}
+                  <button key={cat.slug} onClick={() => selectCategory(cat.slug)}
                     className={`flex shrink-0 items-center gap-2 border-b-2 py-4 text-sm font-semibold transition-colors ${active === cat.slug ? 'border-brand text-brand' : 'border-transparent text-ink-soft hover:text-ink'}`}>
                     {Icon && <Icon className="h-4 w-4" />} {cat.name}
                     <CountBadge count={catCounts[cat.slug] || 0} active={active === cat.slug} />
@@ -650,7 +683,7 @@ export default function Menu() {
                 <tr><td colSpan={7} className="px-5 py-12 text-center text-sm text-ink-soft">
                   {q || active !== 'all' ? 'No dishes match this filter.' : 'No dishes found.'}
                 </td></tr>
-              ) : visibleProducts.map((p) => {
+              ) : pagedProducts.map((p) => {
                 const variants = Array.isArray(p.variants) ? p.variants.filter(v => v.name) : []
                 return (
                   <tr key={p.id} className="hover:bg-line-soft/40 transition-colors">
@@ -722,10 +755,27 @@ export default function Menu() {
             </tbody>
           </table>
 
-          <div className="flex items-center justify-between p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3 p-5">
             <span className="text-sm text-ink-soft">
-              {loading ? 'Loading…' : `Showing ${visibleProducts.length} of ${products.length} dishes`}
+              {loading
+                ? 'Loading…'
+                : visibleProducts.length === 0
+                  ? 'No dishes to show'
+                  : `Showing ${pageStart + 1}–${Math.min(pageStart + PAGE_SIZE, visibleProducts.length)} of ${visibleProducts.length} dishes`}
             </span>
+            {!loading && pageCount > 1 && (
+              <div className="flex items-center gap-2">
+                <button type="button" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={safePage <= 1}
+                  className="flex items-center gap-1 rounded-lg border border-line px-3 py-1.5 text-xs font-semibold text-ink-soft hover:border-brand hover:text-brand disabled:cursor-not-allowed disabled:opacity-40 transition-colors">
+                  <ChevronLeft className="h-3.5 w-3.5" /> Prev
+                </button>
+                <span className="px-1 text-xs font-semibold text-ink-soft">Page {safePage} of {pageCount}</span>
+                <button type="button" onClick={() => setPage((p) => Math.min(pageCount, p + 1))} disabled={safePage >= pageCount}
+                  className="flex items-center gap-1 rounded-lg border border-line px-3 py-1.5 text-xs font-semibold text-ink-soft hover:border-brand hover:text-brand disabled:cursor-not-allowed disabled:opacity-40 transition-colors">
+                  Next <ChevronRight className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
