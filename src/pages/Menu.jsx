@@ -3,22 +3,33 @@ import {
   Plus, LayoutGrid, CookingPot, Beef, IceCream, Flame, Soup,
   Sandwich, TrendingUp, CheckCircle2, AlertTriangle,
   XCircle, X, Upload, ImagePlus, Trash2, Pencil, Tag,
-  ChevronLeft, ChevronRight,
+  ChevronLeft, ChevronRight, Salad, Utensils,
+  ZoomIn, ZoomOut, Move, RotateCcw, Download,
 } from 'lucide-react'
 import Topbar, { SearchBox, TopIcons, Divider, ProfileChip } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
+import { exportToCsv } from '../lib/csv.js'
 
-// Default fallback categories (used while DB loads or if table missing)
+// Canonical menu categories, in the exact order they should appear. Slugs are
+// kept stable (fry/gravy/tandoor/other) so existing dishes stay categorised;
+// only the display names changed. "Others" is always rendered last.
 const DEFAULT_CATEGORIES = [
-  { name: 'Biryani', slug: 'biryani' }, { name: 'Fry',     slug: 'fry'     },
-  { name: 'Gravy',   slug: 'gravy'   }, { name: 'Kebabs',  slug: 'kebabs'  },
-  { name: 'Tandoor', slug: 'tandoor' }, { name: 'Breads',  slug: 'breads'  },
-  { name: 'Dessert', slug: 'dessert' }, { name: 'Other',   slug: 'other'   },
+  { name: 'Biryani & Rice', slug: 'biryani' },
+  { name: 'Fried',          slug: 'fry'     },
+  { name: 'Kebabs',         slug: 'kebabs'  },
+  { name: 'Roasted',        slug: 'tandoor' },
+  { name: 'Gravies',        slug: 'gravy'   },
+  { name: 'Breads',         slug: 'breads'  },
+  { name: 'Dessert',        slug: 'dessert' },
+  { name: 'Veg',            slug: 'veg'     },
+  { name: 'Combos',         slug: 'combos'  },
+  { name: 'Others',         slug: 'other'   },
 ]
 
 const CAT_ICONS = {
   biryani: CookingPot, fry: Flame, gravy: Soup, kebabs: Beef,
   tandoor: Flame, breads: Sandwich, dessert: IceCream,
+  veg: Salad, combos: Utensils,
 }
 const catIcon = (slug) => CAT_ICONS[slug] ?? null
 
@@ -109,6 +120,53 @@ async function uploadPhoto(file) {
   return urlData.publicUrl
 }
 
+function loadImageEl(src) {
+  return new Promise((res, rej) => {
+    const img = new Image()
+    img.onload = () => res(img)
+    img.onerror = rej
+    img.src = src
+  })
+}
+
+/* Bake the framed view (contain-fit at scale 1, then the manager's zoom/pan)
+ * into a square JPEG so the stored image is exactly what they framed. This
+ * keeps display trivial everywhere and needs no transform data on the customer
+ * app. If nothing was adjusted, the original file is uploaded untouched. */
+async function renderAdjustedPhoto(file, transform, size = 720) {
+  const t = transform || { scale: 1, x: 0, y: 0 }
+  if (t.scale === 1 && t.x === 0 && t.y === 0) return file
+  const url = URL.createObjectURL(file)
+  try {
+    const img = await loadImageEl(url)
+    const canvas = document.createElement('canvas')
+    canvas.width = size
+    canvas.height = size
+    const ctx = canvas.getContext('2d')
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, size, size)
+    // Contain-fit at scale 1 (matches the preview's object-contain baseline),
+    // then apply the manager's scale about centre and translate (fraction of
+    // the frame) — identical math to the CSS transform in PhotoUploader.
+    const ratio = Math.min(size / img.naturalWidth, size / img.naturalHeight)
+    const dw = img.naturalWidth * ratio * t.scale
+    const dh = img.naturalHeight * ratio * t.scale
+    const left = size / 2 - dw / 2 + t.x * size
+    const top = size / 2 - dh / 2 + t.y * size
+    ctx.imageSmoothingEnabled = true
+    ctx.imageSmoothingQuality = 'high'
+    ctx.drawImage(img, left, top, dw, dh)
+    const blob = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', 0.9))
+    if (!blob) return file
+    const base = (file.name || 'dish').replace(/\.\w+$/, '')
+    return new File([blob], `${base}.jpg`, { type: 'image/jpeg' })
+  } catch {
+    return file // any canvas failure -> upload the original untouched
+  } finally {
+    URL.revokeObjectURL(url)
+  }
+}
+
 /* ── Toggle ─────────────────────────────────────────── */
 function Toggle({ on, onChange, disabled }) {
   return (
@@ -140,31 +198,80 @@ function formatFutureTime(isoString) {
   }
 }
 
-/* ── Photo Uploader widget ──────────────────────────── */
-function PhotoUploader({ value, onChange, uploading }) {
-  const ref = useRef(null)
+/* ── Photo Uploader widget (with zoom / pan / center) ─── */
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
+
+function PhotoUploader({ value, onChange, onTransform, transform, uploading }) {
+  const fileRef = useRef(null)
+  const frameRef = useRef(null)
+  const drag = useRef(null)
+  const t = transform || { scale: 1, x: 0, y: 0 }
+
+  const pick = () => { if (!uploading) fileRef.current?.click() }
+  const setScale = (s) => onTransform?.({ ...t, scale: clamp(Number(s.toFixed(2)), 0.4, 4) })
+  const reset = () => onTransform?.({ scale: 1, x: 0, y: 0 })
+
+  const onPointerDown = (e) => {
+    if (!value) return
+    const rect = frameRef.current?.getBoundingClientRect()
+    drag.current = { sx: e.clientX, sy: e.clientY, ox: t.x, oy: t.y, w: rect?.width || 1, h: rect?.height || 1 }
+    e.currentTarget.setPointerCapture?.(e.pointerId)
+  }
+  const onPointerMove = (e) => {
+    const d = drag.current
+    if (!d) return
+    onTransform?.({ ...t, x: d.ox + (e.clientX - d.sx) / d.w, y: d.oy + (e.clientY - d.sy) / d.h })
+  }
+  const endDrag = () => { drag.current = null }
+
+  const iconBtn = 'flex h-7 w-7 items-center justify-center rounded-lg border border-line text-ink-soft hover:border-brand hover:text-brand transition-colors'
+
   return (
     <div>
       <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-ink-soft">Photo (optional)</label>
-      <div onClick={() => !uploading && ref.current?.click()}
-        className={`relative flex h-28 w-full cursor-pointer flex-col items-center justify-center gap-2 overflow-hidden rounded-xl border-2 border-dashed transition-colors ${value ? 'border-brand/40' : 'border-line hover:border-brand/50'} bg-line-soft`}>
+      <div
+        ref={frameRef}
+        onClick={() => { if (!value) pick() }}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={endDrag}
+        onPointerLeave={endDrag}
+        style={{ touchAction: 'none', cursor: value ? 'grab' : 'pointer' }}
+        className={`relative mx-auto flex h-44 w-44 flex-col items-center justify-center gap-2 overflow-hidden rounded-xl border-2 border-dashed transition-colors ${value ? 'border-brand/40' : 'border-line hover:border-brand/50'} bg-line-soft`}
+      >
         {value ? (
-          <>
-            <img src={value} alt="preview" className="absolute inset-0 h-full w-full object-cover" />
-            <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 hover:opacity-100 transition-opacity">
-              <span className="flex items-center gap-1.5 rounded-lg bg-white/90 px-3 py-1.5 text-xs font-bold text-ink">
-                <Upload className="h-3.5 w-3.5" /> Change Photo
-              </span>
-            </div>
-          </>
+          <img
+            src={value}
+            alt="preview"
+            draggable={false}
+            className="absolute inset-0 h-full w-full select-none object-contain"
+            style={{ transform: `translate(${t.x * 100}%, ${t.y * 100}%) scale(${t.scale})` }}
+          />
         ) : (
           <>
             <ImagePlus className="h-6 w-6 text-ink-soft" />
-            <span className="text-xs text-ink-soft">{uploading ? 'Uploading…' : 'Click to upload dish photo'}</span>
+            <span className="px-3 text-center text-xs text-ink-soft">{uploading ? 'Uploading…' : 'Click to upload dish photo'}</span>
           </>
         )}
       </div>
-      <input ref={ref} type="file" accept="image/*" className="hidden"
+
+      {value && (
+        <>
+          <div className="mt-2 flex items-center justify-center gap-2">
+            <button type="button" className={iconBtn} title="Zoom out" onClick={() => setScale(t.scale - 0.2)}><ZoomOut className="h-4 w-4" /></button>
+            <button type="button" className={iconBtn} title="Zoom in" onClick={() => setScale(t.scale + 0.2)}><ZoomIn className="h-4 w-4" /></button>
+            <button type="button" className={iconBtn} title="Center / reset" onClick={reset}><RotateCcw className="h-4 w-4" /></button>
+            <button type="button" onClick={pick} className="flex items-center gap-1 rounded-lg border border-line px-2.5 py-1 text-[11px] font-semibold text-ink-soft hover:border-brand hover:text-brand transition-colors">
+              <Upload className="h-3 w-3" /> Change
+            </button>
+          </div>
+          <p className="mt-1 flex items-center justify-center gap-1 text-[10px] text-ink-soft">
+            <Move className="h-3 w-3" /> Drag to reposition · use +/− to zoom
+          </p>
+        </>
+      )}
+
+      <input ref={fileRef} type="file" accept="image/*" className="hidden"
         onChange={(e) => { const f = e.target.files?.[0]; if (f) onChange(f); e.target.value = '' }} />
     </div>
   )
@@ -226,7 +333,7 @@ function VariantsEditor({ variants, onChange }) {
 /* ─────────────────────────────────────────────────────
    Main component
 ───────────────────────────────────────────────────── */
-const EMPTY_FORM = { name: '', price: '', description: '', category: 'biryani', isVeg: false, photoFile: null, photoPreview: null, variants: [] }
+const EMPTY_FORM = { name: '', price: '', description: '', category: 'biryani', isVeg: false, photoFile: null, photoPreview: null, photoTransform: { scale: 1, x: 0, y: 0 }, variants: [] }
 
 // Show at most this many dishes per page. Pagination is client-side: the menu
 // is small and (now that photos live in the `menu-photos` bucket) each row is
@@ -269,18 +376,35 @@ export default function Menu() {
   const [turnOffCustom, setTurnOffCustom] = useState('')
 
   /* ── Load products ── */
+  // Ordered serial-wise: canonical category order first, then oldest-added
+  // within each category, so the menu reads top-to-bottom in a stable sequence.
   const load = useCallback(() =>
-    supabase.from('products').select('*').order('price', { ascending: false })
+    supabase.from('products').select('*')
       .then(({ data, error }) => {
         if (error) console.error('Failed to load products:', error.message)
-        setProducts(data ?? [])
+        const order = DEFAULT_CATEGORIES.map((c) => c.slug)
+        const rank = (p) => { const i = order.indexOf(effectiveCategory(p.category, p.name)); return i === -1 ? 999 : i }
+        const sorted = [...(data ?? [])].sort((a, b) =>
+          rank(a) - rank(b) ||
+          (a.created_at || '').localeCompare(b.created_at || '') ||
+          (a.name || '').localeCompare(b.name || ''))
+        setProducts(sorted)
         setLoading(false)
       }), [])
 
   /* ── Load categories from DB ── */
+  // The canonical DEFAULT_CATEGORIES list (and its order) always wins. Any
+  // custom category added via the DB that isn't one of ours is appended just
+  // before "Others" so the requested order is preserved.
   const loadCategories = useCallback(async () => {
-    const { data, error } = await supabase.from('menu_categories').select('name, slug').order('created_at', { ascending: false })
-    if (!error && data && data.length > 0) setCategories(data)
+    const { data, error } = await supabase.from('menu_categories').select('name, slug')
+    if (error) return
+    const known = new Set(DEFAULT_CATEGORIES.map((c) => c.slug))
+    const extras = (data ?? []).filter((c) => c.slug && !known.has(c.slug))
+    if (extras.length === 0) return // defaults already in state
+    const base = DEFAULT_CATEGORIES.filter((c) => c.slug !== 'other')
+    const others = DEFAULT_CATEGORIES.filter((c) => c.slug === 'other')
+    setCategories([...base, ...extras, ...others])
   }, [])
 
   useEffect(() => {
@@ -310,6 +434,7 @@ export default function Menu() {
       isVeg: productIsVeg(p),
       photoFile: null,
       photoPreview: p.photo_url || null,
+      photoTransform: { scale: 1, x: 0, y: 0 },
       variants: Array.isArray(p.variants) ? p.variants : [],
     })
   }
@@ -325,7 +450,10 @@ export default function Menu() {
     let photo_url = null
     if (form.photoFile) {
       setPhotoUp(true)
-      try { photo_url = await uploadPhoto(form.photoFile) }
+      try {
+        const baked = await renderAdjustedPhoto(form.photoFile, form.photoTransform)
+        photo_url = await uploadPhoto(baked)
+      }
       catch (err) { setPhotoUp(false); setSaving(false); alert(`Could not upload photo: ${err.message}`); return }
       setPhotoUp(false)
     }
@@ -360,7 +488,10 @@ export default function Menu() {
     let photo_url = editTarget.photo_url
     if (form.photoFile) {
       setPhotoUp(true)
-      try { photo_url = await uploadPhoto(form.photoFile) }
+      try {
+        const baked = await renderAdjustedPhoto(form.photoFile, form.photoTransform)
+        photo_url = await uploadPhoto(baked)
+      }
       catch (err) { setPhotoUp(false); setSaving(false); alert(`Could not upload photo: ${err.message}`); return }
       setPhotoUp(false)
     }
@@ -536,15 +667,40 @@ export default function Menu() {
     { label: 'Sold Out',  count: pad(soldOut), icon: XCircle,       tone: 'text-brand',      bg: 'bg-[#ffdad3]'   },
   ]
 
+  /* ── Export the full menu to CSV, in canonical category order ── */
+  const exportMenu = () => {
+    if (products.length === 0) { alert('No dishes to export.'); return }
+    const order = DEFAULT_CATEGORIES.map((c) => c.slug)
+    const rank = (p) => { const i = order.indexOf(effectiveCategory(p.category, p.name)); return i === -1 ? 999 : i }
+    const sorted = [...products].sort((a, b) =>
+      rank(a) - rank(b) ||
+      (a.created_at || '').localeCompare(b.created_at || '') ||
+      (a.name || '').localeCompare(b.name || ''))
+    const headers = ['#', 'Dish', 'Category', 'Price', 'Available', 'Veg', 'Variants', 'Description']
+    const rows = sorted.map((p, i) => [
+      i + 1,
+      p.name || '',
+      categoryLabel(p.category, p.name, categories),
+      p.price ?? '',
+      p.is_available ? 'Yes' : 'Sold out',
+      productIsVeg(p) ? 'Veg' : 'Non-veg',
+      Array.isArray(p.variants) ? p.variants.filter((v) => v.name).map((v) => `${v.name}: ${v.price}`).join(' | ') : '',
+      p.description || '',
+    ])
+    exportToCsv(`menu-${new Date().toISOString().slice(0, 10)}.csv`, headers, rows)
+  }
+
   /* ── Shared modal form fields ── */
   const renderDishFormFields = (isEdit) => (
     <div className="space-y-4 p-5">
       <PhotoUploader
         value={form.photoPreview}
         uploading={photoUploading}
-        onChange={async (file) => {
+        transform={form.photoTransform}
+        onTransform={(tr) => setForm((f) => ({ ...f, photoTransform: tr }))}
+        onChange={(file) => {
           const preview = URL.createObjectURL(file)
-          setForm((f) => ({ ...f, photoFile: file, photoPreview: preview }))
+          setForm((f) => ({ ...f, photoFile: file, photoPreview: preview, photoTransform: { scale: 1, x: 0, y: 0 } }))
         }}
       />
       <div>
@@ -627,6 +783,10 @@ export default function Menu() {
             <p className="mt-2 text-base text-ink-soft">Organize your culinary offerings, update pricing, and manage availability in real-time.</p>
           </div>
           <div className="flex items-center gap-2">
+            <button onClick={exportMenu}
+              className="flex items-center gap-2 rounded-lg border border-line bg-white px-4 py-2.5 text-sm font-semibold text-ink hover:bg-line-soft">
+              <Download className="h-4 w-4" /> Export
+            </button>
             <button onClick={() => setShowAddCat(true)}
               className="flex items-center gap-2 rounded-lg border border-line bg-white px-4 py-2.5 text-sm font-semibold text-ink hover:bg-line-soft">
               <Tag className="h-4 w-4" /> Add Category
@@ -689,7 +849,7 @@ export default function Menu() {
                   <tr key={p.id} className="hover:bg-line-soft/40 transition-colors">
                     <td className="px-5 py-4">
                       <div className="flex items-center gap-3">
-                        <img src={imgFor(p.name, p.photo_url)} alt="" className="h-12 w-12 rounded-lg bg-line-2 object-cover" />
+                        <img src={imgFor(p.name, p.photo_url)} alt="" className="h-12 w-12 rounded-lg bg-line-2 object-contain object-center" />
                         <div>
                           <p className="flex items-center gap-1.5 text-sm font-semibold text-ink">
                             <VegDot veg={productIsVeg(p)} /> {p.name}

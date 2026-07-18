@@ -136,15 +136,21 @@ function VegMark({ veg, className = '' }) {
 }
 
 // Render an order code with its "BB" prefix in brand red (uppercased) and the
-// remainder in ink black.
+// remainder in ink black, with the last 4 characters bold so the part staff
+// read out to identify the order stands out.
+function boldLast4(s) {
+  if (!s) return s
+  if (s.length <= 4) return <b className="font-bold">{s}</b>
+  return <>{s.slice(0, -4)}<b className="font-bold">{s.slice(-4)}</b></>
+}
 function OrderIdLabel({ order, className = '' }) {
   const code = orderCode(order)
   const m = /^bb(.*)$/i.exec(code)
-  if (!m) return <span className={className}>{code}</span>
+  if (!m) return <span className={className}>{boldLast4(code)}</span>
   return (
     <span className={className}>
       <span className="text-brand">BB</span>
-      <span className="text-ink">{m[1]}</span>
+      <span className="text-ink">{boldLast4(m[1])}</span>
     </span>
   )
 }
@@ -536,6 +542,30 @@ const CANCEL_REASONS = [
   'Other',
 ]
 
+// Preset reasons shown when staff switch the restaurant to Closed. The chosen
+// text is saved on restaurants.closed_reason so the customer app can show it.
+const CLOSE_REASONS = [
+  'Raw material / Items out of stock',
+  'High order rush / Kitchen is full',
+  'Kitchen staff not available',
+  'Nearing closing time',
+  'Outlet timings are not correct',
+  'Temporarily closed',
+  'Issues with menu',
+  'Closed due to LPG shortage',
+  'Others',
+]
+
+// "08:00:00" / "08:00" -> "8:00 AM"
+function fmtTime12(t) {
+  if (!t) return ''
+  const [hStr, m = '00'] = String(t).split(':')
+  let h = Number(hStr)
+  const ampm = h >= 12 ? 'PM' : 'AM'
+  h = h % 12 || 12
+  return `${h}:${m} ${ampm}`
+}
+
 const PAYMENT = {
   pending_verification: { label: 'Awaiting Verification', bg: 'bg-amber-50', text: 'text-amber-700', dot: 'bg-amber-500' },
   verified: { label: 'Verified', bg: 'bg-pos-soft', text: 'text-pos-dark', dot: 'bg-pos' },
@@ -581,15 +611,45 @@ export default function Orders() {
   const [nowTs, setNowTs] = useState(() => Date.now())
 
   // Restaurant open/closed state (shared with Outlets + Settings).
-  const { isOpen: storeOpen, loading: storeLoading, setOpen: setStoreOpen } = useRestaurant()
+  const {
+    isOpen: storeOpen, loading: storeLoading, setOpen: setStoreOpen,
+    closedReason, effectiveOpen, openTime: storeOpenTime,
+  } = useRestaurant()
   const [storeBusy, setStoreBusy] = useState(false)
+  // Close-reason picker (shown before switching the restaurant off).
+  const [showCloseReason, setShowCloseReason] = useState(false)
+  const [closeReasonChoice, setCloseReasonChoice] = useState(CLOSE_REASONS[0])
+  const [closeReasonNote, setCloseReasonNote] = useState('')
   const autoSchedule = isAutoScheduleOn()
+
   const toggleStore = async () => {
     if (storeBusy || storeLoading) return
+    // Outside opening hours the switch is inert — the clock decides (see handoff).
+    if (closedReason === 'hours') return
+    if (storeOpen) {
+      // Closing: collect a reason first so the customer app can show it.
+      setCloseReasonChoice(CLOSE_REASONS[0])
+      setCloseReasonNote('')
+      setShowCloseReason(true)
+      return
+    }
+    // Re-opening: no reason needed.
     setStoreBusy(true)
-    const { error } = await setStoreOpen(!storeOpen)
+    const { error } = await setStoreOpen(true)
     setStoreBusy(false)
     if (error) alert(`Could not update restaurant status: ${error.message}`)
+  }
+
+  const confirmCloseStore = async () => {
+    const base = closeReasonChoice === 'Others' ? '' : closeReasonChoice
+    const note = closeReasonNote.trim()
+    const reason = [base, note].filter(Boolean).join(' — ')
+    if (!reason) { alert('Please pick a reason or write a short note.'); return }
+    setStoreBusy(true)
+    const { error } = await setStoreOpen(false, reason, note || null)
+    setStoreBusy(false)
+    if (error) { alert(`Could not update restaurant status: ${error.message}`); return }
+    setShowCloseReason(false)
   }
 
   // Load orders
@@ -832,13 +892,28 @@ export default function Orders() {
       return
     }
     setBusy(order.id)
-    const { error } = await supabase
+    // Ask for the affected rows back (.select). If the DB accepts the write but
+    // a Row-Level Security rule / trigger silently blocks it (common once a
+    // rider is assigned to a ready order), there's no error yet zero rows
+    // change — without this we'd fake success and the realtime reload would
+    // snap the order straight back to 'ready'.
+    const { data, error } = await supabase
       .from('orders')
       .update({ status: 'cancelled', cancellation_reason: reason })
       .eq('id', order.id)
+      .select('id')
     setBusy(null)
     if (error) {
       alert(`Could not cancel order: ${error.message}`)
+      return
+    }
+    if (!data || data.length === 0) {
+      alert(
+        'The order was not cancelled: the database rejected the change without ' +
+        'an error (0 rows updated). This usually means a permissions rule blocks ' +
+        'cancelling an order once a rider is assigned. It needs to be allowed on ' +
+        'the backend (orders UPDATE policy / status-transition trigger).'
+      )
       return
     }
     patchLocal(order.id, { status: 'cancelled', cancellation_reason: reason })
@@ -912,6 +987,15 @@ export default function Orders() {
   const preparingCount = activeOrders.filter(o => getTabForOrder(o) === 'preparing').length
   const readyCount = activeOrders.filter(o => getTabForOrder(o) === 'ready').length
 
+  // Effective open/closed display for the topbar switch (clock wins, then the
+  // manual switch). Outside opening hours the switch is inert.
+  const storeClosedHours = closedReason === 'hours'
+  const storeStatusLabel = effectiveOpen
+    ? 'Restaurant Open'
+    : storeClosedHours
+      ? `Closed · Opens ${fmtTime12(storeOpenTime)}`
+      : 'Temporarily Closed'
+
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-canvas">
       {/* Topbar */}
@@ -926,28 +1010,36 @@ export default function Orders() {
           <button
             type="button"
             role="switch"
-            aria-checked={storeOpen}
+            aria-checked={effectiveOpen}
             onClick={toggleStore}
-            disabled={storeBusy || storeLoading}
-            title={autoSchedule ? 'Auto open/close is on — set hours in Settings' : 'Toggle whether the restaurant is accepting orders'}
+            disabled={storeBusy || storeLoading || storeClosedHours}
+            title={
+              storeClosedHours
+                ? 'Outside opening hours — change closing time in Settings to trade later'
+                : autoSchedule
+                  ? 'Auto open/close is on — set hours in Settings'
+                  : 'Toggle whether the restaurant is accepting orders'
+            }
             className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors disabled:opacity-60 ${
-              storeOpen
+              effectiveOpen
                 ? 'border-pos-soft bg-pos-soft text-pos-dark'
-                : 'border-brand/30 bg-[#ffdad3] text-brand'
+                : storeClosedHours
+                  ? 'border-brand/30 bg-[#ffdad3] text-brand'
+                  : 'border-amber-200 bg-amber-50 text-amber-700'
             }`}
           >
             <span
               className={`flex h-4 w-7 items-center rounded-full p-0.5 transition-colors ${
-                storeOpen ? 'bg-pos' : 'bg-brand'
+                effectiveOpen ? 'bg-pos' : storeClosedHours ? 'bg-brand' : 'bg-amber-500'
               }`}
             >
               <span
                 className={`h-3 w-3 rounded-full bg-white shadow transition-transform ${
-                  storeOpen ? 'translate-x-3' : 'translate-x-0'
+                  effectiveOpen ? 'translate-x-3' : 'translate-x-0'
                 }`}
               />
             </span>
-            Restaurant {storeOpen ? 'Open' : 'Closed'}
+            {storeStatusLabel}
             {autoSchedule && (
               <span className="rounded bg-white/60 px-1 text-[9px] uppercase tracking-wide">Auto</span>
             )}
@@ -1795,6 +1887,90 @@ export default function Orders() {
                 className="flex items-center gap-1.5 rounded-lg bg-red-600 px-5 py-2.5 text-xs font-bold text-white hover:bg-red-700 transition-colors disabled:opacity-50"
               >
                 <Ban className="h-4 w-4" /> Cancel order
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Restaurant close-reason dialog (shown before switching the store off) */}
+      {showCloseReason && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white shadow-xl">
+            <div className="flex items-start justify-between border-b border-line p-5">
+              <div className="flex items-center gap-2">
+                <span className="rounded-lg bg-amber-50 p-2 text-amber-600">
+                  <Clock className="h-5 w-5" />
+                </span>
+                <div>
+                  <h3 className="text-base font-bold text-ink">Select reason for going offline</h3>
+                  <p className="text-xs text-ink-soft">The customer app will show this while you're closed.</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCloseReason(false)}
+                className="rounded p-1 text-ink-soft hover:bg-line-soft hover:text-ink transition-colors"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="max-h-[55vh] overflow-y-auto p-5">
+              <div className="space-y-1.5">
+                {CLOSE_REASONS.map((reason) => (
+                  <label
+                    key={reason}
+                    className={`flex cursor-pointer items-center gap-2.5 rounded-lg border px-3 py-2.5 text-sm transition-colors ${
+                      closeReasonChoice === reason
+                        ? 'border-amber-300 bg-amber-50 text-ink'
+                        : 'border-line text-ink-soft hover:bg-canvas'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="close-reason"
+                      value={reason}
+                      checked={closeReasonChoice === reason}
+                      onChange={() => setCloseReasonChoice(reason)}
+                      className="accent-amber-600"
+                    />
+                    <span className="font-medium">{reason}</span>
+                  </label>
+                ))}
+              </div>
+
+              <p className="mb-2 mt-4 text-[10px] font-bold uppercase tracking-wider text-ink-soft">
+                {closeReasonChoice === 'Others' ? 'Message to customer' : 'Add a note (optional)'}
+              </p>
+              <textarea
+                value={closeReasonNote}
+                onChange={(e) => setCloseReasonNote(e.target.value)}
+                rows={3}
+                placeholder={
+                  closeReasonChoice === 'Others'
+                    ? 'Tell customers why the outlet is closed…'
+                    : 'Any extra detail for customers…'
+                }
+                className="w-full resize-none rounded-lg border border-line px-3 py-2 text-sm text-ink placeholder:text-ink-soft focus:border-amber-300 focus:outline-none focus:ring-1 focus:ring-amber-200"
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-3 border-t border-line p-5">
+              <button
+                type="button"
+                onClick={() => setShowCloseReason(false)}
+                className="rounded-lg border border-line px-4 py-2.5 text-xs font-semibold text-ink-soft hover:bg-canvas transition-colors"
+              >
+                Stay open
+              </button>
+              <button
+                type="button"
+                disabled={storeBusy}
+                onClick={confirmCloseStore}
+                className="flex items-center gap-1.5 rounded-lg bg-amber-600 px-5 py-2.5 text-xs font-bold text-white hover:bg-amber-700 transition-colors disabled:opacity-50"
+              >
+                {storeBusy ? 'Closing…' : 'Go offline'}
               </button>
             </div>
           </div>

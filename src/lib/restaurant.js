@@ -33,6 +33,18 @@ export function isWithinOpenHours(now, open, close) {
   return cur >= o || cur < c // wraps past midnight
 }
 
+// Effective closed state — kept in step with the customer app. The clock wins,
+// then the manual switch:
+//   outside opening hours -> 'hours'   (normal schedule; "Opens at …")
+//   is_open === false     -> 'manual'  (staff closed early; "Back soon")
+//   otherwise             -> null      (open)
+// The manual switch can only close *early*; it can't trade past closing_time.
+export function getClosedReason(open, close, isOpen, now = new Date()) {
+  if (!isWithinOpenHours(now, open, close)) return 'hours'
+  if (!isOpen) return 'manual'
+  return null
+}
+
 // Shared restaurant open-state + schedule, kept in sync via realtime. Every
 // consumer sees the same status because it all reads/writes the same rows.
 let channelSeq = 0
@@ -40,6 +52,10 @@ let channelSeq = 0
 export function useRestaurant() {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
+  // Re-tick every minute so the schedule-derived open/closed state updates even
+  // when nothing else changes (a page left open at 01:59 must flip at 02:00).
+  // `is_open` itself arrives instantly via the realtime subscription below.
+  const [now, setNow] = useState(() => new Date())
   // Unique channel name per hook instance so multiple consumers don't clash.
   const [channelName] = useState(() => `restaurant-status-${++channelSeq}`)
 
@@ -61,19 +77,40 @@ export function useRestaurant() {
     }
   }, [load, channelName])
 
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 60 * 1000)
+    return () => clearInterval(id)
+  }, [])
+
   const primary = rows[0] || null
   // The store counts as open only when every outlet is open.
   const isOpen = rows.length > 0 && rows.every((r) => r.is_open)
   const openTime = primary?.opening_time || DEFAULT_OPEN
   const closeTime = primary?.closing_time || DEFAULT_CLOSE
 
-  // Flip every outlet's is_open flag (optimistic; reloads on failure).
+  // Effective state the customer app also derives (clock wins, then the switch).
+  const closedReason = getClosedReason(openTime, closeTime, isOpen, now)
+  const effectiveOpen = closedReason === null
+  // The staff-chosen close reason persisted on the row (for display/echo).
+  const closedReasonText = primary?.closed_reason || null
+
+  // Flip every outlet's is_open flag (optimistic; reloads on failure). When
+  // closing, persist the staff-chosen reason/note so the customer app can show
+  // it; opening clears them. Falls back gracefully if the closed_reason /
+  // closed_note columns haven't been added to the table yet.
   const setOpen = useCallback(
-    async (next) => {
+    async (next, reason = null, note = null) => {
       const ids = rows.map((r) => r.id)
       if (ids.length === 0) return { error: { message: 'No outlet found to update.' } }
-      setRows((prev) => prev.map((r) => ({ ...r, is_open: next })))
-      const { error } = await supabase.from('restaurants').update({ is_open: next }).in('id', ids)
+      const patch = next
+        ? { is_open: true, closed_reason: null, closed_note: null }
+        : { is_open: false, closed_reason: reason, closed_note: note }
+      setRows((prev) => prev.map((r) => ({ ...r, ...patch })))
+      let { error } = await supabase.from('restaurants').update(patch).in('id', ids)
+      // Retry with just is_open if the reason columns don't exist yet.
+      if (error && /closed_reason|closed_note|column|schema cache/i.test(error.message)) {
+        ;({ error } = await supabase.from('restaurants').update({ is_open: next }).in('id', ids))
+      }
       if (error) load()
       return { error }
     },
@@ -97,5 +134,8 @@ export function useRestaurant() {
     [rows]
   )
 
-  return { rows, loading, isOpen, openTime, closeTime, setOpen, saveSchedule, reload: load }
+  return {
+    rows, loading, isOpen, openTime, closeTime, setOpen, saveSchedule, reload: load,
+    now, closedReason, effectiveOpen, closedReasonText,
+  }
 }
