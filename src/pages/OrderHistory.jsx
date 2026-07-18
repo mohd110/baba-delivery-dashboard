@@ -14,6 +14,7 @@ import {
 import Topbar, { TopIcons } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
 import { orderCode } from '../lib/format.js'
+import { boldLast4 } from '../components/OrderIdLabel.jsx'
 import DateRangeFilter from '../components/DateRangeFilter.jsx'
 import { inRange } from '../lib/dateRange.js'
 import { exportToCsv } from '../lib/csv.js'
@@ -257,11 +258,11 @@ export default function OrderHistory() {
                         }`}
                       >
                         <td className="px-6 py-4">
-                          <span className="flex items-center gap-1.5 text-xs font-bold text-brand">
+                          <span className="flex items-center gap-1.5 text-xs font-medium text-brand">
                             <span className="flex h-5 w-5 items-center justify-center rounded bg-line-soft text-ink-soft">
                               <Hash className="h-3 w-3" />
                             </span>
-                            {shortId}
+                            {boldLast4(shortId)}
                           </span>
                         </td>
                         <td className="px-6 py-4 text-xs text-ink-soft">{timestamp}</td>
@@ -292,8 +293,8 @@ export default function OrderHistory() {
             {/* Header */}
             <div className="p-4 border-b border-line flex justify-between items-center bg-canvas/30">
               <div>
-                <h3 className="text-sm font-bold text-ink">
-                  Details for {orderCode(selectedOrder)}
+                <h3 className="text-sm font-medium text-ink">
+                  Details for {boldLast4(orderCode(selectedOrder))}
                 </h3>
                 <p className="text-[10px] text-ink-soft mt-0.5">
                   Logged on {new Date(selectedOrder.created_at).toLocaleString()}

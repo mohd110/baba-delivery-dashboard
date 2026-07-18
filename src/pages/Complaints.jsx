@@ -17,6 +17,7 @@ import {
 import Topbar, { TopIcons } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
 import { orderCode } from '../lib/format.js'
+import { boldLast4 } from '../components/OrderIdLabel.jsx'
 
 // Visual styling per known complaint category. Unknown categories fall back to
 // a neutral style with a prettified label (see typeMetaFor below), so the page
@@ -340,8 +341,8 @@ export default function Complaints() {
                           {c.description}
                         </p>
                       </div>
-                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-line-soft text-ink-soft">
-                        {c.orderShortId}
+                      <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-line-soft text-ink-soft">
+                        {boldLast4(c.orderShortId)}
                       </span>
                     </div>
 
@@ -379,7 +380,7 @@ export default function Complaints() {
                     </div>
                     <p className="text-xs text-ink-soft mt-1">
                       Linked to order{' '}
-                      <span className="font-semibold text-brand">{selectedComplaint.orderShortId}</span> • Filed{' '}
+                      <span className="text-brand">{boldLast4(selectedComplaint.orderShortId)}</span> • Filed{' '}
                       {new Date(selectedComplaint.timestamp).toLocaleTimeString()} ({new Date(selectedComplaint.timestamp).toLocaleDateString()})
                     </p>
                   </div>

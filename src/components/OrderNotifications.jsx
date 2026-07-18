@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { BellRing, X } from 'lucide-react'
 import { supabase } from '../lib/supabase.js'
 import { orderCode } from '../lib/format.js'
+import { boldLast4 } from './OrderIdLabel.jsx'
 
 let toastSeq = 0
 
@@ -148,7 +149,7 @@ export default function OrderNotifications() {
           <div className="min-w-0 flex-1">
             <p className="text-sm font-bold text-ink">New order received</p>
             <p className="mt-0.5 truncate text-xs text-ink-soft">
-              {t.code}
+              {boldLast4(t.code)}
               {t.total != null ? ` · ₹${t.total.toLocaleString('en-IN')}` : ''} · {t.name}
             </p>
             <p className="mt-0.5 text-[11px] font-semibold text-[#b45309]">

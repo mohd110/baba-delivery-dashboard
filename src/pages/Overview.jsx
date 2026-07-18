@@ -13,6 +13,7 @@ import {
 import Topbar, { SearchBox, TopIcons, Divider, ProfileChip } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
 import { orderCode } from '../lib/format.js'
+import { boldLast4 } from '../components/OrderIdLabel.jsx'
 import DateRangeFilter from '../components/DateRangeFilter.jsx'
 import { inRange, rangeLabel } from '../lib/dateRange.js'
 import { exportToCsv } from '../lib/csv.js'
@@ -94,7 +95,7 @@ function OrderRow({ img, name, id, price, status }) {
         <img src={img} alt="" className="h-10 w-10 rounded-lg bg-line-2 object-cover" />
         <div>
           <p className="text-sm font-semibold text-ink">{name}</p>
-          <p className="text-xs text-ink-soft">{id}</p>
+          <p className="text-xs text-ink-soft">{boldLast4(id)}</p>
         </div>
       </div>
       <div className="flex flex-col items-end gap-1">
