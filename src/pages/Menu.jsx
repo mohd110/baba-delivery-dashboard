@@ -486,13 +486,30 @@ export default function Menu() {
     setSaving(true)
 
     let photo_url = editTarget.photo_url
+    const t = form.photoTransform || { scale: 1, x: 0, y: 0 }
+    const transformApplied = t.scale !== 1 || t.x !== 0 || t.y !== 0
+
     if (form.photoFile) {
+      // New file picked — bake the current transform into it before uploading.
       setPhotoUp(true)
       try {
         const baked = await renderAdjustedPhoto(form.photoFile, form.photoTransform)
         photo_url = await uploadPhoto(baked)
       }
       catch (err) { setPhotoUp(false); setSaving(false); alert(`Could not upload photo: ${err.message}`); return }
+      setPhotoUp(false)
+    } else if (transformApplied && editTarget.photo_url) {
+      // No new file, but the manager zoomed / panned the existing photo.
+      // Fetch it as a Blob, bake the transform, and re-upload.
+      setPhotoUp(true)
+      try {
+        const resp = await fetch(editTarget.photo_url)
+        const blob = await resp.blob()
+        const origFile = new File([blob], 'dish.jpg', { type: blob.type || 'image/jpeg' })
+        const baked = await renderAdjustedPhoto(origFile, form.photoTransform)
+        photo_url = await uploadPhoto(baked)
+      }
+      catch (err) { setPhotoUp(false); setSaving(false); alert(`Could not apply crop: ${err.message}`); return }
       setPhotoUp(false)
     }
 
@@ -831,16 +848,15 @@ export default function Menu() {
                 <th className="px-5 py-3">Category</th>
                 <th className="px-5 py-3">Price / Variants</th>
                 <th className="px-5 py-3">Status</th>
-                <th className="px-5 py-3">Photo</th>
                 <th className="px-5 py-3">Availability</th>
                 <th className="px-5 py-3">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-line-soft">
               {loading ? (
-                <tr><td colSpan={7} className="px-5 py-12 text-center text-sm text-ink-soft">Loading dishes…</td></tr>
+                <tr><td colSpan={6} className="px-5 py-12 text-center text-sm text-ink-soft">Loading dishes…</td></tr>
               ) : visibleProducts.length === 0 ? (
-                <tr><td colSpan={7} className="px-5 py-12 text-center text-sm text-ink-soft">
+                <tr><td colSpan={6} className="px-5 py-12 text-center text-sm text-ink-soft">
                   {q || active !== 'all' ? 'No dishes match this filter.' : 'No dishes found.'}
                 </td></tr>
               ) : pagedProducts.map((p) => {
@@ -885,14 +901,6 @@ export default function Menu() {
                           </span>
                         )}
                       </div>
-                    </td>
-                    <td className="px-5 py-4">
-                      <button type="button" disabled={photoUpdating && photoTarget === p.id}
-                        onClick={() => { setPhotoTarget(p.id); photoInputRef.current?.click() }}
-                        className="flex items-center gap-1.5 rounded-lg border border-line px-2.5 py-1.5 text-[11px] font-semibold text-ink-soft hover:border-brand hover:text-brand disabled:opacity-50 transition-colors">
-                        <Upload className="h-3 w-3" />
-                        {photoUpdating && photoTarget === p.id ? 'Uploading…' : 'Update'}
-                      </button>
                     </td>
                     <td className="px-5 py-4">
                       <Toggle on={p.is_available} disabled={busy.has(p.id)} onChange={() => setAvailability(p.id, !p.is_available)} />

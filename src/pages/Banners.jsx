@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Plus, X, Upload, ImagePlus, Trash2, Image as ImageIcon,
   Eye, EyeOff, ArrowUp, ArrowDown, AlertTriangle, Download,
+  ZoomIn, ZoomOut, RotateCcw, Move,
 } from 'lucide-react'
 import Topbar, { TopIcons } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
@@ -23,7 +24,10 @@ const HARD_MAX_BYTES = 2 * 1024 * 1024
 
 // title / subtitle / link_url still exist on the table but the customer app
 // never renders them, so they're deliberately absent from this form.
-const EMPTY_FORM = { is_active: true, photoFile: null, photoPreview: null, portrait: false, bytes: 0 }
+const EMPTY_FORM = { is_active: true, photoFile: null, photoPreview: null, portrait: false, bytes: 0, photoTransform: { scale: 1, x: 0, y: 0 } }
+
+/* Clamp helper */
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
 
 function loadImageEl(src) {
   return new Promise((resolve, reject) => {
@@ -80,23 +84,88 @@ function kb(bytes) {
   return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.round(bytes / 1024)} KB`
 }
 
-/* ── Image uploader widget ──────────────────────────── */
-function BannerUploader({ value, onPick, uploading, portrait, bytes }) {
-  const ref = useRef(null)
+/* Bake the manager's zoom/pan into the image before upload so the stored
+ * image exactly matches what they framed — identical logic to Menu's version
+ * but targeting a wide 16:7 banner aspect ratio (1600×700 px). */
+async function renderAdjustedBanner(file, transform, w = 1600, h = 700) {
+  const t = transform || { scale: 1, x: 0, y: 0 }
+  if (t.scale === 1 && t.x === 0 && t.y === 0) return file
+  const url = URL.createObjectURL(file)
+  try {
+    const img = await loadImageEl(url)
+    const canvas = document.createElement('canvas')
+    canvas.width = w
+    canvas.height = h
+    const ctx = canvas.getContext('2d')
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, w, h)
+    // cover-fit at scale 1: fill the frame, crop overflowing edges
+    const ratio = Math.max(w / img.naturalWidth, h / img.naturalHeight)
+    const dw = img.naturalWidth * ratio * t.scale
+    const dh = img.naturalHeight * ratio * t.scale
+    const left = w / 2 - dw / 2 + t.x * w
+    const top  = h / 2 - dh / 2 + t.y * h
+    ctx.imageSmoothingEnabled = true
+    ctx.imageSmoothingQuality = 'high'
+    ctx.drawImage(img, left, top, dw, dh)
+    const blob = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', JPEG_QUALITY))
+    if (!blob) return file
+    const base = (file.name || 'banner').replace(/\.\w+$/, '')
+    return new File([blob], `${base}.jpg`, { type: 'image/jpeg' })
+  } catch {
+    return file
+  } finally {
+    URL.revokeObjectURL(url)
+  }
+}
+
+/* ── Banner image uploader with zoom / pan / crop ─── */
+function BannerUploader({ value, onPick, onTransform, transform, uploading, portrait, bytes }) {
+  const fileRef  = useRef(null)
+  const frameRef = useRef(null)
+  const drag     = useRef(null)
+  const t        = transform || { scale: 1, x: 0, y: 0 }
+
+  const pick     = () => { if (!uploading) fileRef.current?.click() }
+  const setScale = (s) => onTransform?.({ ...t, scale: clamp(Number(s.toFixed(2)), 0.5, 4) })
+  const reset    = () => onTransform?.({ scale: 1, x: 0, y: 0 })
+
+  const onPointerDown = (e) => {
+    if (!value) return
+    const rect = frameRef.current?.getBoundingClientRect()
+    drag.current = { sx: e.clientX, sy: e.clientY, ox: t.x, oy: t.y, w: rect?.width || 1, h: rect?.height || 1 }
+    e.currentTarget.setPointerCapture?.(e.pointerId)
+  }
+  const onPointerMove = (e) => {
+    const d = drag.current
+    if (!d) return
+    onTransform?.({ ...t, x: d.ox + (e.clientX - d.sx) / d.w, y: d.oy + (e.clientY - d.sy) / d.h })
+  }
+  const endDrag = () => { drag.current = null }
+
+  const iconBtn = 'flex h-7 w-7 items-center justify-center rounded-lg border border-line text-ink-soft hover:border-brand hover:text-brand transition-colors'
+
   return (
     <div>
       <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-ink-soft">Slideshow photo</label>
-      <div onClick={() => !uploading && ref.current?.click()}
-        className={`relative flex h-40 w-full cursor-pointer flex-col items-center justify-center gap-2 overflow-hidden rounded-xl border-2 border-dashed transition-colors ${value ? 'border-brand/40' : 'border-line hover:border-brand/50'} bg-line-soft`}>
+      <div
+        ref={frameRef}
+        onClick={() => { if (!value) pick() }}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={endDrag}
+        onPointerLeave={endDrag}
+        style={{ touchAction: 'none', cursor: value ? 'grab' : 'pointer' }}
+        className={`relative flex h-40 w-full flex-col items-center justify-center gap-2 overflow-hidden rounded-xl border-2 border-dashed transition-colors ${value ? 'border-brand/40' : 'border-line hover:border-brand/50'} bg-line-soft`}
+      >
         {value ? (
-          <>
-            <img src={value} alt="preview" className="absolute inset-0 h-full w-full object-cover" />
-            <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 hover:opacity-100 transition-opacity">
-              <span className="flex items-center gap-1.5 rounded-lg bg-white/90 px-3 py-1.5 text-xs font-bold text-ink">
-                <Upload className="h-3.5 w-3.5" /> Change photo
-              </span>
-            </div>
-          </>
+          <img
+            src={value}
+            alt="preview"
+            draggable={false}
+            className="absolute inset-0 h-full w-full select-none object-cover"
+            style={{ transform: `translate(${t.x * 100}%, ${t.y * 100}%) scale(${t.scale})` }}
+          />
         ) : (
           <>
             <ImagePlus className="h-6 w-6 text-ink-soft" />
@@ -104,6 +173,23 @@ function BannerUploader({ value, onPick, uploading, portrait, bytes }) {
           </>
         )}
       </div>
+
+      {value && (
+        <>
+          <div className="mt-2 flex items-center justify-center gap-2">
+            <button type="button" className={iconBtn} title="Zoom out" onClick={() => setScale(t.scale - 0.2)}><ZoomOut className="h-4 w-4" /></button>
+            <button type="button" className={iconBtn} title="Zoom in" onClick={() => setScale(t.scale + 0.2)}><ZoomIn className="h-4 w-4" /></button>
+            <button type="button" className={iconBtn} title="Center / reset" onClick={reset}><RotateCcw className="h-4 w-4" /></button>
+            <button type="button" onClick={pick} className="flex items-center gap-1 rounded-lg border border-line px-2.5 py-1 text-[11px] font-semibold text-ink-soft hover:border-brand hover:text-brand transition-colors">
+              <Upload className="h-3 w-3" /> Change
+            </button>
+          </div>
+          <p className="mt-1 flex items-center justify-center gap-1 text-[10px] text-ink-soft">
+            <Move className="h-3 w-3" /> Drag to reposition · use +/− to zoom
+          </p>
+        </>
+      )}
+
       <p className="mt-1.5 text-[11px] text-ink-soft">
         Resized to {MAX_WIDTH}px wide, JPEG. Keep it under {Math.round(TARGET_BYTES / 1024)} KB.
         {bytes ? <span className="font-semibold text-ink"> · this one: {kb(bytes)}</span> : null}
@@ -111,10 +197,10 @@ function BannerUploader({ value, onPick, uploading, portrait, bytes }) {
       {portrait && (
         <p className="mt-1 flex items-start gap-1.5 text-[11px] font-semibold text-amber-700">
           <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
-          That's a portrait photo. The hero is a short, wide strip — the top and bottom will be cropped off.
+          That's a portrait photo. Use the zoom/drag controls above to frame the best part.
         </p>
       )}
-      <input ref={ref} type="file" accept="image/*" className="hidden"
+      <input ref={fileRef} type="file" accept="image/*" className="hidden"
         onChange={(e) => { const f = e.target.files?.[0]; if (f) onPick(f); e.target.value = '' }} />
     </div>
   )
@@ -174,7 +260,7 @@ export default function Banners() {
   const openAdd = () => { setEditTarget(null); setForm(EMPTY_FORM); setShowForm(true) }
   const openEdit = (b) => {
     setEditTarget(b)
-    setForm({ ...EMPTY_FORM, is_active: b.is_active ?? true, photoPreview: b.image_url || null })
+    setForm({ ...EMPTY_FORM, is_active: b.is_active ?? true, photoPreview: b.image_url || null, photoTransform: { scale: 1, x: 0, y: 0 } })
     setShowForm(true)
   }
   const closeForm = () => { setShowForm(false); setEditTarget(null); setForm(EMPTY_FORM) }
@@ -186,7 +272,7 @@ export default function Banners() {
       alert(`That photo is ${kb(out.size)} even after resizing — too large for the hero. Please use a smaller or less detailed image.`)
       return
     }
-    setForm((f) => ({ ...f, photoFile: out, photoPreview: URL.createObjectURL(out), portrait, bytes: out.size }))
+    setForm((f) => ({ ...f, photoFile: out, photoPreview: URL.createObjectURL(out), portrait, bytes: out.size, photoTransform: { scale: 1, x: 0, y: 0 } }))
   }
 
   /* ── Save (add or edit) ── */
@@ -198,9 +284,29 @@ export default function Banners() {
     let image_url = editTarget?.image_url || null
     if (form.photoFile) {
       setUploading(true)
-      try { image_url = await uploadBanner(form.photoFile) }
+      try {
+        const baked = await renderAdjustedBanner(form.photoFile, form.photoTransform)
+        image_url = await uploadBanner(baked)
+      }
       catch (err) { setUploading(false); setSaving(false); alert(`Could not upload photo: ${err.message}`); return }
       setUploading(false)
+    } else if (editTarget?.image_url) {
+      // No new file picked but a zoom/pan transform was applied — fetch the
+      // existing image, bake the crop into it, and re-upload.
+      const t = form.photoTransform || { scale: 1, x: 0, y: 0 }
+      const transformApplied = t.scale !== 1 || t.x !== 0 || t.y !== 0
+      if (transformApplied) {
+        setUploading(true)
+        try {
+          const resp = await fetch(editTarget.image_url)
+          const blob = await resp.blob()
+          const origFile = new File([blob], 'banner.jpg', { type: blob.type || 'image/jpeg' })
+          const baked = await renderAdjustedBanner(origFile, form.photoTransform)
+          image_url = await uploadBanner(baked)
+        }
+        catch (err) { setUploading(false); setSaving(false); alert(`Could not apply crop: ${err.message}`); return }
+        setUploading(false)
+      }
     }
 
     const row = { image_url, is_active: form.is_active }
@@ -421,6 +527,8 @@ export default function Banners() {
                 uploading={uploading}
                 portrait={form.portrait}
                 bytes={form.bytes}
+                transform={form.photoTransform}
+                onTransform={(tr) => setForm((f) => ({ ...f, photoTransform: tr }))}
                 onPick={pickPhoto}
               />
               <label className="flex cursor-pointer items-center justify-between rounded-lg border border-line px-3 py-2.5">
