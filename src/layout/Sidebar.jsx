@@ -163,7 +163,7 @@ export default function Sidebar() {
                   }`
                 }
               >
-                <ImageIcon className="h-3.5 w-3.5" /> Banners
+                <ImageIcon className="h-3.5 w-3.5" /> Hero Slideshow
               </NavLink>
               <NavLink
                 to="/settings"
