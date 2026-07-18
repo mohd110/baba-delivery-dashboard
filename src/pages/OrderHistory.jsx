@@ -6,6 +6,7 @@ import {
   FileSpreadsheet,
   CheckCircle,
   XCircle,
+  Clock,
   Hash,
   Phone,
   Wallet,
@@ -30,7 +31,12 @@ function imgFor(name = '') {
 const HISTORICAL_STATUS = {
   delivered: { label: 'Delivered', bg: 'bg-pos-soft', text: 'text-pos-dark', dot: 'bg-pos' },
   cancelled: { label: 'Cancelled', bg: 'bg-red-50', text: 'text-red-700', dot: 'bg-red-500' },
+  ready: { label: 'Ready for Pickup', bg: 'bg-amber-50', text: 'text-amber-700', dot: 'bg-amber-500' },
+  out_for_delivery: { label: 'Out for Delivery', bg: 'bg-indigo-50', text: 'text-indigo-700', dot: 'bg-indigo-600' },
 }
+
+// Statuses treated as "in progress" in the history view.
+const IN_PROGRESS = ['ready', 'out_for_delivery']
 
 export default function OrderHistory() {
   const [orders, setOrders] = useState([])
@@ -47,7 +53,7 @@ export default function OrderHistory() {
       .select(
         '*, order_items(quantity, price_at_order, products(name, photo_url)), rider:profiles!orders_rider_id_fkey(full_name, phone)'
       )
-      .in('status', ['delivered', 'cancelled'])
+      .in('status', ['delivered', 'cancelled', ...IN_PROGRESS])
       .order('created_at', { ascending: false })
       .then(({ data, error }) => {
         if (error) console.error('Failed to load order history:', error.message)
@@ -58,12 +64,20 @@ export default function OrderHistory() {
 
   useEffect(() => {
     load()
+    // In-progress orders are live, so keep the list in sync as they advance.
+    const channel = supabase
+      .channel('order-history-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => load())
+      .subscribe()
+    return () => { supabase.removeChannel(channel) }
   }, [load])
 
   // Filter logic
   const filteredOrders = orders.filter((o) => {
-    // Status check
-    if (statusFilter !== 'all' && o.status !== statusFilter) return false
+    // Status check ('in_progress' groups the two live statuses)
+    if (statusFilter === 'in_progress') {
+      if (!IN_PROGRESS.includes(o.status)) return false
+    } else if (statusFilter !== 'all' && o.status !== statusFilter) return false
 
     // Search query check
     if (searchQuery) {
@@ -87,6 +101,7 @@ export default function OrderHistory() {
   const dateScoped = orders.filter((o) => inRange(o.created_at, range))
   const deliveredCount = dateScoped.filter(o => o.status === 'delivered').length
   const cancelledCount = dateScoped.filter(o => o.status === 'cancelled').length
+  const inProgressCount = dateScoped.filter(o => IN_PROGRESS.includes(o.status)).length
 
   const handleExportCSV = () => {
     if (filteredOrders.length === 0) {
@@ -142,6 +157,16 @@ export default function OrderHistory() {
                 }`}
               >
                 All Orders ({dateScoped.length})
+              </button>
+              <button
+                onClick={() => setStatusFilter('in_progress')}
+                className={`px-4 py-2 rounded-lg text-xs font-bold border transition-all flex items-center gap-1.5 ${
+                  statusFilter === 'in_progress'
+                    ? 'bg-amber-50 text-amber-700 border-amber-100 font-bold'
+                    : 'bg-white text-ink-soft border-line hover:border-amber-200'
+                }`}
+              >
+                <Clock className="h-3.5 w-3.5" /> In Progress ({inProgressCount})
               </button>
               <button
                 onClick={() => setStatusFilter('delivered')}
@@ -285,14 +310,18 @@ export default function OrderHistory() {
             {/* Content body */}
             <div className="flex-1 overflow-y-auto p-5 space-y-5">
               {/* Status block */}
-              <div className="flex justify-between items-center rounded-lg border border-line bg-canvas p-3">
-                <span className="text-xs font-semibold text-ink-soft">Settled Status</span>
-                <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold ${
-                  selectedOrder.status === 'delivered' ? 'bg-pos-soft text-pos-dark' : 'bg-red-50 text-red-700'
-                }`}>
-                  {selectedOrder.status === 'delivered' ? 'Delivered successfully' : 'Cancelled'}
-                </span>
-              </div>
+              {(() => {
+                const s = HISTORICAL_STATUS[selectedOrder.status] ?? HISTORICAL_STATUS.delivered
+                const inProgress = IN_PROGRESS.includes(selectedOrder.status)
+                return (
+                  <div className="flex justify-between items-center rounded-lg border border-line bg-canvas p-3">
+                    <span className="text-xs font-semibold text-ink-soft">{inProgress ? 'Current Status' : 'Settled Status'}</span>
+                    <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold ${s.bg} ${s.text}`}>
+                      <span className={`h-1.5 w-1.5 rounded-full ${s.dot}`} /> {s.label}
+                    </span>
+                  </div>
+                )
+              })()}
 
               {/* Cancellation reason (shown to customer) */}
               {selectedOrder.status === 'cancelled' && selectedOrder.cancellation_reason && (
