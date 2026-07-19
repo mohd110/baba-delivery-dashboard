@@ -255,6 +255,14 @@ function ticketNumbers(order) {
   }
 }
 
+// Printed order code: uppercase throughout, with the last 4 characters bold
+// and a step larger so they stand out on the thermal roll.
+function orderCodeHtml(order) {
+  const code = orderCode(order).toUpperCase()
+  if (code.length <= 4) return `<span class="idlast">${escapeHtml(code)}</span>`
+  return `${escapeHtml(code.slice(0, -4))}<span class="idlast">${escapeHtml(code.slice(-4))}</span>`
+}
+
 // Header block shared by both tickets.
 function outletHead(showPaid) {
   return `
@@ -273,7 +281,7 @@ function barcodeFoot(order, caption) {
   return `
     <div class="center small">${escapeHtml(caption)}</div>
     <div class="barcodewrap">${barcodeSvg(code)}</div>
-    <div class="center small">${escapeHtml(code)}</div>`
+    <div class="center small">${orderCodeHtml(order)}</div>`
 }
 
 // Try to surface any customer instruction stored on the order.
@@ -314,7 +322,7 @@ function buildKotHtml(order) {
       <div class="kotmeta">
         <div>${dateShort(placed)} ${timeShort(placed)}</div>
         <div class="big">KOT - ${escapeHtml(token)}</div>
-        <div>Order : ${escapeHtml(orderCode(order))}</div>
+        <div>Order : ${orderCodeHtml(order)}</div>
         <div class="big up">${escapeHtml(type)}</div>
       </div>
       <hr />
@@ -377,7 +385,7 @@ function buildBillHtml(order) {
     <div class="ticket">
       ${outletHead(paid)}
       <hr />
-      <div class="line"><b>Order No</b> [${escapeHtml(orderCode(order))}]</div>
+      <div class="line"><b>Order No</b> [${orderCodeHtml(order)}]</div>
       <div class="line">Name: ${escapeHtml(addr.name || 'Customer')}</div>
       ${addr.phone ? `<div class="line">Phone: ${escapeHtml(addr.phone)}</div>` : ''}
       ${addr.address ? `<div class="line small">${escapeHtml(addr.address)}</div>` : ''}
@@ -445,6 +453,7 @@ function printTickets(title, innerHtml) {
           .row { display: flex; justify-content: space-between; font-size: 12px; padding: 1px 0; }
           .grand { text-align: center; font-weight: bold; font-size: 16px; margin: 2px 0; }
           .center { text-align: center; }
+          .idlast { font-weight: 800; font-size: 1.35em; }
           .small { font-size: 10px; }
           .barcodewrap { margin: 6px 0 2px; padding: 0 6px; }
           .barcode { display: block; }
