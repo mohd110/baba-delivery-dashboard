@@ -3,7 +3,7 @@ import {
   Plus, LayoutGrid, CookingPot, Beef, IceCream, Flame, Soup,
   Sandwich, TrendingUp, CheckCircle2, AlertTriangle,
   XCircle, X, Upload, ImagePlus, Trash2, Pencil, Tag,
-  ChevronLeft, ChevronRight, Salad, Utensils,
+  ChevronLeft, ChevronRight, ChevronUp, ChevronDown, Salad, Utensils,
   ZoomIn, ZoomOut, Move, RotateCcw, Download,
 } from 'lucide-react'
 import Topbar, { SearchBox, TopIcons, Divider, ProfileChip } from '../layout/Topbar.jsx'
@@ -52,6 +52,82 @@ function guessCategory(name = '') {
 function effectiveCategory(cat, name = '') {
   const c = String(cat || '').toLowerCase()
   return c || guessCategory(name)
+}
+
+// Desired display order of dishes within each category. A product is matched to
+// an entry by a normalised name (lowercase, alphanumerics only) so minor
+// punctuation / spacing differences still line up. Dishes not listed here sort
+// after the listed ones (oldest-added first) within their category.
+const DISH_ORDER = {
+  biryani: [
+    'Chicken Biryani', 'Chicken Tikka Rice', 'Chicken Lollipop Rice',
+    'Chicken Leg Rice', 'Chicken Barra Rice', 'Chicken Tangdi Rice',
+    'Mutton Biryani 2 pcs', 'Mutton Biryani 3 pcs', 'Biryani Rice',
+  ],
+  fry: [
+    'Chicken Leg Piece', 'Chicken Chest Piece', 'Chicken Tikka Fry 6 pcs',
+    'Chicken Lollipop 4 pcs', 'Chicken Kaleji',
+  ],
+  kebabs: [
+    'Chicken Shami Kebab 4 pcs', 'Chicken Addana Seek Kebab', 'Special Galawati Kebab',
+  ],
+  tandoor: [
+    'Chicken Leg roasted', 'Chicken Chest roasted', 'Murg Malai tikka',
+    'Chicken Tikka', 'Chicken Afgani Barra', 'Chicken Tangdi',
+    'Chicken Aatishi', 'Chicken Tandoori Full',
+  ],
+  gravy: [
+    'Butter chicken', 'Chicken Stew', 'Chicken Korma', 'Chicken tikka masala',
+    'Kadhai chicken', 'Mutton korma', 'Mutton stew', 'Mutton rogan josh',
+  ],
+  breads: [
+    'Rumali Roti', 'Tandoori Roti plain', 'Tandoori Butter roti', 'Plain Naan',
+    'Butter Naan', 'Garlic Butter Naan', 'Laccha paratha',
+  ],
+  dessert: [
+    'Shahu tukda', 'Zafrani Kheer', 'Lassi', 'Butter Bun',
+  ],
+  veg: [
+    'Paneer Tikka Roasted', 'Paneer Malai tikka roasted', 'Paneer Makhani',
+    'Paneer Tikka Masala', 'Kadhai Paneer', 'Veg Biryani',
+  ],
+}
+
+const normDishName = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '')
+
+// slug -> { normalisedName: index } for O(1) rank lookup within a category.
+const DISH_RANK = Object.fromEntries(
+  Object.entries(DISH_ORDER).map(([slug, names]) => [
+    slug, Object.fromEntries(names.map((n, i) => [normDishName(n), i])),
+  ])
+)
+
+// Position of a dish inside its category's desired sequence (999 = unlisted).
+function dishRank(p) {
+  const table = DISH_RANK[effectiveCategory(p.category, p.name)]
+  if (!table) return 999
+  const r = table[normDishName(p.name)]
+  return r === undefined ? 999 : r
+}
+
+// Canonical menu ordering: categories in their fixed order, then the manager's
+// saved `sort_order` within each category, then the DISH_ORDER default, then
+// oldest-added. Used by both the initial load and optimistic reorders so the
+// list always resolves to the same sequence. `sort_order` is what the customer
+// app should order by too, so a change here is a change everywhere.
+const CAT_SLUG_ORDER = DEFAULT_CATEGORIES.map((c) => c.slug)
+function sortProducts(list) {
+  const catRank = (p) => {
+    const i = CAT_SLUG_ORDER.indexOf(effectiveCategory(p.category, p.name))
+    return i === -1 ? 999 : i
+  }
+  const so = (p) => (p.sort_order == null ? Infinity : p.sort_order)
+  return [...list].sort((a, b) =>
+    catRank(a) - catRank(b) ||
+    so(a) - so(b) ||
+    dishRank(a) - dishRank(b) ||
+    (a.created_at || '').localeCompare(b.created_at || '') ||
+    (a.name || '').localeCompare(b.name || ''))
 }
 
 // Guess veg / non-veg from a dish name when the DB has no is_veg flag. Veg
@@ -391,26 +467,47 @@ export default function Menu() {
   const [photoUpdating, setPhotoUpd]  = useState(false)
   const photoInputRef                 = useRef(null)
 
+  // Manual reorder state: true while a swap is being persisted; seededRef guards
+  // the one-time back-fill of sort_order so it never runs twice.
+  const [reordering, setReordering]   = useState(false)
+  const seededRef                     = useRef(false)
+
   // Turn off modal
   const [turnOffTarget, setTurnOffTarget] = useState(null)
   const [turnOffCustom, setTurnOffCustom] = useState('')
 
   /* ── Load products ── */
-  // Ordered serial-wise: canonical category order first, then oldest-added
-  // within each category, so the menu reads top-to-bottom in a stable sequence.
-  const load = useCallback(() =>
-    supabase.from('products').select('*')
-      .then(({ data, error }) => {
-        if (error) console.error('Failed to load products:', error.message)
-        const order = DEFAULT_CATEGORIES.map((c) => c.slug)
-        const rank = (p) => { const i = order.indexOf(effectiveCategory(p.category, p.name)); return i === -1 ? 999 : i }
-        const sorted = [...(data ?? [])].sort((a, b) =>
-          rank(a) - rank(b) ||
-          (a.created_at || '').localeCompare(b.created_at || '') ||
-          (a.name || '').localeCompare(b.name || ''))
-        setProducts(sorted)
-        setLoading(false)
-      }), [])
+  // Ordered by sortProducts(): category order, then the saved sort_order within
+  // each category. The first time we see rows that have the sort_order column
+  // but no value yet, we back-fill it from the canonical order so managers start
+  // from the intended sequence and can then drag dishes around freely.
+  const load = useCallback(async () => {
+    const { data, error } = await supabase.from('products').select('*')
+    if (error) console.error('Failed to load products:', error.message)
+    const rows = data ?? []
+    const sorted = sortProducts(rows)
+
+    // Does the sort_order column exist? (PostgREST only returns it if it does.)
+    const hasColumn = rows.length > 0 && Object.prototype.hasOwnProperty.call(rows[0], 'sort_order')
+    const unseeded = sorted.filter((p) => p.sort_order == null)
+    if (hasColumn && !seededRef.current && unseeded.length > 0) {
+      // Back-fill only the rows missing a value, numbering them in canonical
+      // order after whatever's already set. Runs once per session.
+      seededRef.current = true
+      let next = sorted.reduce((m, p) => Math.max(m, p.sort_order || 0), 0)
+      await Promise.all(unseeded.map((p) => {
+        next += 10
+        return supabase.from('products').update({ sort_order: next }).eq('id', p.id)
+      }))
+      const { data: fresh } = await supabase.from('products').select('*')
+      setProducts(sortProducts(fresh ?? sorted))
+      setLoading(false)
+      return
+    }
+
+    setProducts(sorted)
+    setLoading(false)
+  }, [])
 
   /* ── Load categories from DB ── */
   // The canonical DEFAULT_CATEGORIES list (and its order) always wins. Any
@@ -435,6 +532,35 @@ export default function Menu() {
       .subscribe()
     return () => { supabase.removeChannel(channel) }
   }, [load, loadCategories])
+
+  /* ── Reorder a dish within its category ── */
+  // Swaps this dish's sort_order with its neighbour (dir -1 = up, +1 = down) in
+  // the same category, persisting both to Supabase. Because the customer app
+  // orders by the same column, the new order shows there too.
+  const moveDish = async (p, dir) => {
+    if (reordering) return
+    const slug = effectiveCategory(p.category, p.name)
+    const group = products.filter((x) => effectiveCategory(x.category, x.name) === slug)
+    const idx = group.findIndex((x) => x.id === p.id)
+    const other = group[idx + dir]
+    if (!other) return // already at the top / bottom of its category
+    if (p.sort_order == null || other.sort_order == null) { load(); return }
+
+    const a = p.sort_order, b = other.sort_order
+    setReordering(true)
+    // Optimistic: swap locally and re-sort so the move is instant.
+    setProducts((prev) => sortProducts(prev.map((x) =>
+      x.id === p.id ? { ...x, sort_order: b }
+        : x.id === other.id ? { ...x, sort_order: a }
+          : x)))
+    const results = await Promise.all([
+      supabase.from('products').update({ sort_order: b }).eq('id', p.id),
+      supabase.from('products').update({ sort_order: a }).eq('id', other.id),
+    ])
+    setReordering(false)
+    const err = results.find((r) => r.error)?.error
+    if (err) { alert(`Could not reorder: ${err.message}`); load() }
+  }
 
   /* ── Upload photo helper ── */
   const handlePhotoFile = async (file, setPreview) => {
@@ -479,16 +605,19 @@ export default function Menu() {
     }
 
     const variants = form.variants.filter(v => v.name.trim()).map(v => ({ name: v.name.trim(), price: Number(v.price) || 0 }))
-    const row = { name, price, description: form.description.trim() || '', is_available: true, category: form.category, is_veg: form.isVeg, variants, ...(photo_url ? { photo_url } : {}) }
+    // New dishes append after the current highest sort_order so they land at the
+    // end (of their category) and can be dragged into place afterwards.
+    const nextSort = products.reduce((m, p) => Math.max(m, p.sort_order || 0), 0) + 10
+    const row = { name, price, description: form.description.trim() || '', is_available: true, category: form.category, is_veg: form.isVeg, variants, sort_order: nextSort, ...(photo_url ? { photo_url } : {}) }
 
     let { error } = await supabase.from('products').insert(row)
-    // Retry without is_veg if that column hasn't been added to the table yet.
-    if (error && /is_veg|schema cache|column/i.test(error.message)) {
-      const { is_veg: _v, ...noVeg } = row
+    // Retry without is_veg / sort_order if those columns aren't on the table yet.
+    if (error && /is_veg|sort_order|schema cache|column/i.test(error.message)) {
+      const { is_veg: _v, sort_order: _s, ...noVeg } = row
       ;({ error } = await supabase.from('products').insert(noVeg))
     }
     if (error?.message?.toLowerCase().includes('category')) {
-      const { category: _c, is_veg: _v2, ...r2 } = row
+      const { category: _c, is_veg: _v2, sort_order: _s2, ...r2 } = row
       ;({ error } = await supabase.from('products').insert(r2))
     }
     setSaving(false)
@@ -677,6 +806,20 @@ export default function Menu() {
   // renders correctly without needing to write state back.
   const selectCategory = (slug) => { setActive(slug); setPage(1) }
   const handleSearch   = (v) => { setSearch(v); setPage(1) }
+
+  // Each dish's index within its category, for enabling/disabling the ▲/▼
+  // reorder arrows. Reordering is hidden while a search filter is active because
+  // the neighbour a dish would swap with may be filtered out of view.
+  const catGroups = products.reduce((acc, p) => {
+    const s = effectiveCategory(p.category, p.name)
+    ;(acc[s] ||= []).push(p.id)
+    return acc
+  }, {})
+  const catPos = (p) => {
+    const arr = catGroups[effectiveCategory(p.category, p.name)] || []
+    return { i: arr.indexOf(p.id), len: arr.length }
+  }
+  const canReorder = q === ''
 
   const inStock  = products.filter((p) => p.is_available).length
   const soldOut  = products.filter((p) => !p.is_available).length
@@ -878,6 +1021,7 @@ export default function Menu() {
                 </td></tr>
               ) : pagedProducts.map((p) => {
                 const variants = Array.isArray(p.variants) ? p.variants.filter(v => v.name) : []
+                const pos = catPos(p)
                 return (
                   <tr key={p.id} className="hover:bg-line-soft/40 transition-colors">
                     <td className="px-5 py-4">
@@ -924,6 +1068,22 @@ export default function Menu() {
                     </td>
                     <td className="px-5 py-4">
                       <div className="flex items-center gap-2">
+                        {canReorder && (
+                          <div className="flex flex-col">
+                            <button type="button" title="Move up" aria-label="Move up"
+                              disabled={reordering || pos.i <= 0}
+                              onClick={() => moveDish(p, -1)}
+                              className="rounded border border-line px-1 text-ink-soft hover:border-brand hover:text-brand disabled:cursor-not-allowed disabled:opacity-30 transition-colors">
+                              <ChevronUp className="h-3 w-3" />
+                            </button>
+                            <button type="button" title="Move down" aria-label="Move down"
+                              disabled={reordering || pos.i >= pos.len - 1}
+                              onClick={() => moveDish(p, 1)}
+                              className="-mt-px rounded border border-line px-1 text-ink-soft hover:border-brand hover:text-brand disabled:cursor-not-allowed disabled:opacity-30 transition-colors">
+                              <ChevronDown className="h-3 w-3" />
+                            </button>
+                          </div>
+                        )}
                         <button type="button" onClick={() => openEdit(p)}
                           className="flex items-center gap-1.5 rounded-lg border border-line px-2.5 py-1.5 text-[11px] font-semibold text-ink-soft hover:border-brand hover:text-brand transition-colors">
                           <Pencil className="h-3 w-3" /> Edit
