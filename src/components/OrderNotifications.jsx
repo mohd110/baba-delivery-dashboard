@@ -100,7 +100,7 @@ export default function OrderNotifications() {
           const toast = {
             id,
             orderId: o.id || null,
-            code: orderCode(o).toUpperCase(),
+            code: orderCode(o),
             total: typeof o.total === 'number' ? o.total : null,
             name: addr.name || 'New customer',
           }
