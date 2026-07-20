@@ -508,8 +508,8 @@ const STATUS = {
 
 // Prep-time presets (minutes) offered when accepting an order. The chosen
 // value is written to orders.eta_minutes and drives the customer's ETA.
-const ETA_PRESETS = [15, 20, 30, 45, 60]
-const DEFAULT_ETA = 30
+const ETA_PRESETS = [5, 10, 15, 20]
+const DEFAULT_ETA = 15
 
 const NEXT_ACTION = {
   // Accept jumps straight to 'preparing' — no intermediate 'accepted' step.

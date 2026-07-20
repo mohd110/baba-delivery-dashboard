@@ -120,13 +120,39 @@ async function uploadPhoto(file) {
   return urlData.publicUrl
 }
 
-function loadImageEl(src) {
+function loadImageEl(src, crossOrigin) {
   return new Promise((res, rej) => {
     const img = new Image()
+    if (crossOrigin) img.crossOrigin = crossOrigin
     img.onload = () => res(img)
-    img.onerror = rej
+    img.onerror = () => rej(new Error('Could not load image'))
     img.src = src
   })
+}
+
+/* Draw a loaded image "contain-fit at scale 1, then the manager's zoom/pan"
+ * into a square JPEG File — identical math to the CSS transform in
+ * PhotoUploader. Shared by the file-based and URL-based renderers. */
+async function bakeFramedImage(img, transform, size, name) {
+  const t = transform || { scale: 1, x: 0, y: 0 }
+  const canvas = document.createElement('canvas')
+  canvas.width = size
+  canvas.height = size
+  const ctx = canvas.getContext('2d')
+  ctx.fillStyle = '#ffffff'
+  ctx.fillRect(0, 0, size, size)
+  const ratio = Math.min(size / img.naturalWidth, size / img.naturalHeight)
+  const dw = img.naturalWidth * ratio * t.scale
+  const dh = img.naturalHeight * ratio * t.scale
+  const left = size / 2 - dw / 2 + t.x * size
+  const top = size / 2 - dh / 2 + t.y * size
+  ctx.imageSmoothingEnabled = true
+  ctx.imageSmoothingQuality = 'high'
+  ctx.drawImage(img, left, top, dw, dh)
+  const blob = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', 0.9))
+  if (!blob) return null
+  const base = (name || 'dish').replace(/\.\w+$/, '')
+  return new File([blob], `${base}.jpg`, { type: 'image/jpeg' })
 }
 
 /* Bake the framed view (contain-fit at scale 1, then the manager's zoom/pan)
@@ -139,32 +165,26 @@ async function renderAdjustedPhoto(file, transform, size = 720) {
   const url = URL.createObjectURL(file)
   try {
     const img = await loadImageEl(url)
-    const canvas = document.createElement('canvas')
-    canvas.width = size
-    canvas.height = size
-    const ctx = canvas.getContext('2d')
-    ctx.fillStyle = '#ffffff'
-    ctx.fillRect(0, 0, size, size)
-    // Contain-fit at scale 1 (matches the preview's object-contain baseline),
-    // then apply the manager's scale about centre and translate (fraction of
-    // the frame) — identical math to the CSS transform in PhotoUploader.
-    const ratio = Math.min(size / img.naturalWidth, size / img.naturalHeight)
-    const dw = img.naturalWidth * ratio * t.scale
-    const dh = img.naturalHeight * ratio * t.scale
-    const left = size / 2 - dw / 2 + t.x * size
-    const top = size / 2 - dh / 2 + t.y * size
-    ctx.imageSmoothingEnabled = true
-    ctx.imageSmoothingQuality = 'high'
-    ctx.drawImage(img, left, top, dw, dh)
-    const blob = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', 0.9))
-    if (!blob) return file
-    const base = (file.name || 'dish').replace(/\.\w+$/, '')
-    return new File([blob], `${base}.jpg`, { type: 'image/jpeg' })
+    const baked = await bakeFramedImage(img, t, size, file.name)
+    return baked || file // any canvas failure -> upload the original untouched
   } catch {
-    return file // any canvas failure -> upload the original untouched
+    return file
   } finally {
     URL.revokeObjectURL(url)
   }
+}
+
+/* Re-crop an already-uploaded photo. We load it through an <img> with
+ * crossOrigin='anonymous' (so the canvas stays untainted and toBlob works) and
+ * a cache-buster query param. Using fetch() here fails with "Failed to fetch":
+ * the preview <img> caches an opaque (non-CORS) response, which a later CORS
+ * fetch of the same URL then reuses and rejects. */
+async function renderAdjustedPhotoFromUrl(src, transform, size = 720) {
+  const bust = src.includes('?') ? '&' : '?'
+  const img = await loadImageEl(`${src}${bust}cb=${Date.now()}`, 'anonymous')
+  const baked = await bakeFramedImage(img, transform, size, 'dish')
+  if (!baked) throw new Error('Could not render crop')
+  return baked
 }
 
 /* ── Toggle ─────────────────────────────────────────── */
@@ -500,13 +520,10 @@ export default function Menu() {
       setPhotoUp(false)
     } else if (transformApplied && editTarget.photo_url) {
       // No new file, but the manager zoomed / panned the existing photo.
-      // Fetch it as a Blob, bake the transform, and re-upload.
+      // Load it (CORS-safe), bake the transform, and re-upload.
       setPhotoUp(true)
       try {
-        const resp = await fetch(editTarget.photo_url)
-        const blob = await resp.blob()
-        const origFile = new File([blob], 'dish.jpg', { type: blob.type || 'image/jpeg' })
-        const baked = await renderAdjustedPhoto(origFile, form.photoTransform)
+        const baked = await renderAdjustedPhotoFromUrl(editTarget.photo_url, form.photoTransform)
         photo_url = await uploadPhoto(baked)
       }
       catch (err) { setPhotoUp(false); setSaving(false); alert(`Could not apply crop: ${err.message}`); return }

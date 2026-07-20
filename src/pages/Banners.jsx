@@ -29,11 +29,12 @@ const EMPTY_FORM = { is_active: true, photoFile: null, photoPreview: null, portr
 /* Clamp helper */
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
 
-function loadImageEl(src) {
+function loadImageEl(src, crossOrigin) {
   return new Promise((resolve, reject) => {
     const img = new Image()
+    if (crossOrigin) img.crossOrigin = crossOrigin
     img.onload = () => resolve(img)
-    img.onerror = reject
+    img.onerror = () => reject(new Error('Could not load image'))
     img.src = src
   })
 }
@@ -87,36 +88,54 @@ function kb(bytes) {
 /* Bake the manager's zoom/pan into the image before upload so the stored
  * image exactly matches what they framed — identical logic to Menu's version
  * but targeting a wide 16:7 banner aspect ratio (1600×700 px). */
+function bakeBanner(img, transform, w, h, name) {
+  const t = transform || { scale: 1, x: 0, y: 0 }
+  const canvas = document.createElement('canvas')
+  canvas.width = w
+  canvas.height = h
+  const ctx = canvas.getContext('2d')
+  ctx.fillStyle = '#ffffff'
+  ctx.fillRect(0, 0, w, h)
+  // cover-fit at scale 1: fill the frame, crop overflowing edges
+  const ratio = Math.max(w / img.naturalWidth, h / img.naturalHeight)
+  const dw = img.naturalWidth * ratio * t.scale
+  const dh = img.naturalHeight * ratio * t.scale
+  const left = w / 2 - dw / 2 + t.x * w
+  const top  = h / 2 - dh / 2 + t.y * h
+  ctx.imageSmoothingEnabled = true
+  ctx.imageSmoothingQuality = 'high'
+  ctx.drawImage(img, left, top, dw, dh)
+  return new Promise((res) => canvas.toBlob((blob) => {
+    if (!blob) return res(null)
+    const base = (name || 'banner').replace(/\.\w+$/, '')
+    res(new File([blob], `${base}.jpg`, { type: 'image/jpeg' }))
+  }, 'image/jpeg', JPEG_QUALITY))
+}
+
 async function renderAdjustedBanner(file, transform, w = 1600, h = 700) {
   const t = transform || { scale: 1, x: 0, y: 0 }
   if (t.scale === 1 && t.x === 0 && t.y === 0) return file
   const url = URL.createObjectURL(file)
   try {
     const img = await loadImageEl(url)
-    const canvas = document.createElement('canvas')
-    canvas.width = w
-    canvas.height = h
-    const ctx = canvas.getContext('2d')
-    ctx.fillStyle = '#ffffff'
-    ctx.fillRect(0, 0, w, h)
-    // cover-fit at scale 1: fill the frame, crop overflowing edges
-    const ratio = Math.max(w / img.naturalWidth, h / img.naturalHeight)
-    const dw = img.naturalWidth * ratio * t.scale
-    const dh = img.naturalHeight * ratio * t.scale
-    const left = w / 2 - dw / 2 + t.x * w
-    const top  = h / 2 - dh / 2 + t.y * h
-    ctx.imageSmoothingEnabled = true
-    ctx.imageSmoothingQuality = 'high'
-    ctx.drawImage(img, left, top, dw, dh)
-    const blob = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', JPEG_QUALITY))
-    if (!blob) return file
-    const base = (file.name || 'banner').replace(/\.\w+$/, '')
-    return new File([blob], `${base}.jpg`, { type: 'image/jpeg' })
+    return (await bakeBanner(img, t, w, h, file.name)) || file
   } catch {
     return file
   } finally {
     URL.revokeObjectURL(url)
   }
+}
+
+/* Re-crop an already-uploaded banner. Loaded through an <img> with
+ * crossOrigin='anonymous' + a cache-buster so the canvas stays untainted and
+ * toBlob works. fetch() fails here with "Failed to fetch": the preview <img>
+ * caches an opaque response that a later CORS fetch reuses and rejects. */
+async function renderAdjustedBannerFromUrl(src, transform, w = 1600, h = 700) {
+  const bust = src.includes('?') ? '&' : '?'
+  const img = await loadImageEl(`${src}${bust}cb=${Date.now()}`, 'anonymous')
+  const baked = await bakeBanner(img, transform, w, h, 'banner')
+  if (!baked) throw new Error('Could not render crop')
+  return baked
 }
 
 /* ── Banner image uploader with zoom / pan / crop ─── */
@@ -291,17 +310,14 @@ export default function Banners() {
       catch (err) { setUploading(false); setSaving(false); alert(`Could not upload photo: ${err.message}`); return }
       setUploading(false)
     } else if (editTarget?.image_url) {
-      // No new file picked but a zoom/pan transform was applied — fetch the
-      // existing image, bake the crop into it, and re-upload.
+      // No new file picked but a zoom/pan transform was applied — load the
+      // existing image (CORS-safe), bake the crop into it, and re-upload.
       const t = form.photoTransform || { scale: 1, x: 0, y: 0 }
       const transformApplied = t.scale !== 1 || t.x !== 0 || t.y !== 0
       if (transformApplied) {
         setUploading(true)
         try {
-          const resp = await fetch(editTarget.image_url)
-          const blob = await resp.blob()
-          const origFile = new File([blob], 'banner.jpg', { type: blob.type || 'image/jpeg' })
-          const baked = await renderAdjustedBanner(origFile, form.photoTransform)
+          const baked = await renderAdjustedBannerFromUrl(editTarget.image_url, form.photoTransform)
           image_url = await uploadBanner(baked)
         }
         catch (err) { setUploading(false); setSaving(false); alert(`Could not apply crop: ${err.message}`); return }
