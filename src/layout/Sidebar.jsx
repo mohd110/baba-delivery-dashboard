@@ -97,8 +97,8 @@ export default function Sidebar() {
       <nav className="flex flex-1 flex-col items-center gap-1 overflow-y-auto px-2 pt-1">
         <div className="space-y-1">
           <NavItem to="/orders" label="Active Orders" icon={ShoppingBag} badge={activeCount} />
-          <NavItem to="/menu" label="Menu" icon={BookOpen} />
           <NavItem to="/order-history" label="Order History" icon={History} />
+          <NavItem to="/menu" label="Menu" icon={BookOpen} />
           <NavItem to="/reports" label="Reporting" icon={BarChart3} />
           <NavItem to="/complaints" label="Customer Complaints" icon={AlertTriangle} badge={complaintCount} />
         </div>
