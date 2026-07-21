@@ -47,12 +47,21 @@ function elapsed(iso) {
   return `${Math.floor(hr / 24)}d`
 }
 
-// Prep countdown target: the moment the order is due to be ready. Uses the same
-// inputs the customer app reads (placed-at + eta_minutes), so the dashboard
-// countdown and the customer's ETA always agree. Null when no ETA is set.
+// Anchor for prep/ready timers: the moment the kitchen accepted the order and
+// started cooking (`accepted_at`). Falls back to `created_at` for orders that
+// were accepted before this column existed, or if the column isn't present yet.
+function prepStartTs(order) {
+  const t = order?.accepted_at ? new Date(order.accepted_at).getTime() : NaN
+  return Number.isNaN(t) ? new Date(order?.created_at).getTime() : t
+}
+
+// Prep countdown target: the moment the order is due to be ready. Counts the
+// eta_minutes forward from acceptance (accepted_at), not from when the order was
+// received — so time spent waiting in "New" doesn't eat into the prep clock.
+// The customer app should anchor its "Ready in" on the same accepted_at.
 function readyByTs(order) {
   if (!order || !(order.eta_minutes > 0)) return null
-  return new Date(order.created_at).getTime() + order.eta_minutes * 60000
+  return prepStartTs(order) + order.eta_minutes * 60000
 }
 
 // Format a signed remaining-time as M:SS, prefixing "+" once the timer is over.
@@ -298,7 +307,7 @@ function customerNote(order) {
 // Kitchen Order Ticket — mirrors the thermal KOT layout.
 function buildKotHtml(order) {
   const placed = new Date(order.created_at)
-  const prepBy = new Date(placed.getTime() + (order.eta_minutes ?? 15) * 60000)
+  const prepBy = new Date(prepStartTs(order) + (order.eta_minutes ?? 15) * 60000)
   const { token } = ticketNumbers(order)
   const items = order.order_items ?? []
   const type = (order.order_type || 'Delivery').replace(/\b\w/g, (c) => c.toUpperCase())
@@ -529,6 +538,8 @@ const CANCEL_REASONS = [
   'Payment could not be verified',
   'Customer requested cancellation',
   'Rider cancelled the order',
+  'Rider Not Available Now',
+  'Delivery is not possible due to rain',
   'Other',
 ]
 
@@ -786,15 +797,20 @@ export default function Orders() {
     if (!action || busy) return
     const patch = { status: action.to }
     if (action.verifyPayment) patch.payment_status = 'verified'
-    // Stamp the prep time when accepting so the customer gets a real ETA.
-    if (action.to === 'preparing' && opts.etaMinutes != null) patch.eta_minutes = opts.etaMinutes
+    // Stamp acceptance time + prep time when accepting: accepted_at anchors the
+    // ready countdown so it starts now (not at order-received time), and
+    // eta_minutes gives the customer a real ETA.
+    if (action.to === 'preparing') {
+      patch.accepted_at = new Date().toISOString()
+      if (opts.etaMinutes != null) patch.eta_minutes = opts.etaMinutes
+    }
     setBusy(order.id)
     let appliedPatch = patch
     let { error } = await supabase.from('orders').update(patch).eq('id', order.id)
-    // If the eta_minutes column isn't there yet (migration 015 not run), retry
-    // without it so accepting orders still works.
-    if (error && patch.eta_minutes != null && /eta_minutes|schema cache|column/i.test(error.message)) {
-      const { eta_minutes: _dropped, ...rest } = patch
+    // If the optional columns (eta_minutes / accepted_at) aren't there yet,
+    // retry without them so accepting orders still works.
+    if (error && /eta_minutes|accepted_at|schema cache|column/i.test(error.message)) {
+      const { eta_minutes: _eta, accepted_at: _acc, ...rest } = patch
       appliedPatch = rest
       ;({ error } = await supabase.from('orders').update(rest).eq('id', order.id))
     }
@@ -1153,7 +1169,10 @@ export default function Orders() {
               filteredOrders.map((o) => {
                 const items = o.order_items ?? []
                 const isSelected = o.id === selectedOrderId
-                const elapsedMin = elapsed(o.created_at)
+                // Pending cards show time waiting to be accepted; once accepted,
+                // the clock measures prep time from acceptance (accepted_at).
+                const elapsedMin =
+                  o.status === 'pending' ? elapsed(o.created_at) : elapsed(o.accepted_at || o.created_at)
 
                 // Highlight cards that are running late in kitchen
                 const minutes = parseInt(elapsedMin) || 0
@@ -1308,8 +1327,7 @@ export default function Orders() {
                             <span>
                               Ready by{' '}
                               {new Date(
-                                new Date(selectedOrder.created_at).getTime() +
-                                  selectedOrder.eta_minutes * 60000
+                                prepStartTs(selectedOrder) + selectedOrder.eta_minutes * 60000
                               ).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
                             </span>
                           </>

@@ -1,15 +1,21 @@
 import { orderCode } from '../lib/format.js'
 
-// Last 4 chars are bold+extrabold; the prefix is explicitly font-normal so it
-// stays regular weight even when the parent element is font-bold.
+// Only the last 4 chars are bold; the prefix is explicitly font-normal so it
+// stays regular weight even when the parent element is font-bold. The bold is
+// font-bold (not extrabold) so the digits read as one continuous run.
+//
+// Everything is wrapped in a single inline span so this always renders as ONE
+// element. Returning a bare fragment made the two halves separate children — if
+// the parent was a flex row with `gap`, that gap got inserted *between* the
+// digits and the last-4, looking like a gap in the number.
 export function boldLast4(s) {
   if (!s) return s
-  if (s.length <= 4) return <b className="font-extrabold">{s}</b>
+  if (s.length <= 4) return <b className="font-bold">{s}</b>
   return (
-    <>
+    <span className="whitespace-nowrap">
       <span className="font-normal">{s.slice(0, -4)}</span>
-      <b className="font-extrabold">{s.slice(-4)}</b>
-    </>
+      <b className="font-bold">{s.slice(-4)}</b>
+    </span>
   )
 }
 
