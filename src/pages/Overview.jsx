@@ -296,7 +296,7 @@ export default function Overview() {
         <div className="flex items-center gap-1">
           <TopIcons />
           <Divider />
-          <ProfileChip name="Chef Biryani" img="/assets/admin-topbar.png" />
+          <ProfileChip name="Wali Baba Foods" sub="Restaurant Admin" />
         </div>
       </Topbar>
       <div className="relative p-8">

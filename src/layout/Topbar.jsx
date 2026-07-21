@@ -57,18 +57,21 @@ export function Divider() {
   return <div className="mx-1 h-6 w-px bg-line" />
 }
 
-export function ProfileChip({ name, sub, img, initials, initialsBg = 'bg-brand' }) {
+export function ProfileChip({ name = 'Wali Baba Foods', sub = 'Restaurant Admin', img, initials, initialsBg = 'bg-brand' }) {
+  const logoSrc = img || '/assets/walibaba logo.jpeg'
   return (
     <div className="flex items-center gap-3">
-      {img ? (
-        <img src={img} alt={name} className="h-8 w-8 rounded-full bg-line-2 object-cover" />
-      ) : (
-        <span
-          className={`flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold text-white ${initialsBg}`}
-        >
-          {initials}
-        </span>
-      )}
+      <img
+        src={logoSrc}
+        onError={(e) => {
+          if (!e.currentTarget.dataset.triedFallback) {
+            e.currentTarget.dataset.triedFallback = 'true'
+            e.currentTarget.src = '/assets/logo.png'
+          }
+        }}
+        alt={name}
+        className="h-9 w-9 shrink-0 rounded-full bg-line-2 object-cover ring-2 ring-brand/15 shadow-sm"
+      />
       <div className="flex flex-col leading-tight">
         <span className="text-sm font-semibold text-ink">{name}</span>
         {sub && <span className="text-[10px] uppercase tracking-wide text-ink-soft">{sub}</span>}

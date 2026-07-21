@@ -77,6 +77,8 @@ function fmtCountdown(ms) {
 const SNOOZE_MIN = 5
 // How long the card blinks and the buzzer sounds after a timer runs out.
 const ALARM_MS = 60000
+// Pending orders not accepted within this window are auto-cancelled.
+const AUTO_CANCEL_MINUTES = 10
 
 // --- Prep-timer buzzer (Web Audio, no asset) -------------------------------
 // A short repeating square-wave beep that runs while any prep timer is expired.
@@ -756,6 +758,45 @@ export default function Orders() {
   // Belt-and-braces: silence the buzzer if the page unmounts.
   useEffect(() => () => stopBuzzer(), [])
 
+  // ── Auto-cancel pending orders that haven't been accepted in time ──────
+  // Derive which pending orders have sat unaccepted past AUTO_CANCEL_MINUTES.
+  const pendingOverdueOrders = activeOrders.filter((o) => {
+    if (o.status !== 'pending') return false
+    // Skip orders that are on hold waiting for the customer (unavailable items).
+    if (isAwaitingCustomer(o)) return false
+    const age = nowTs - new Date(o.created_at).getTime()
+    return age >= AUTO_CANCEL_MINUTES * 60000
+  })
+
+  // Track which orders we've already fired a cancel for so we don't double-cancel.
+  const autoCancelledRef = useRef(new Set())
+
+  useEffect(() => {
+    if (pendingOverdueOrders.length === 0) return
+    pendingOverdueOrders.forEach(async (order) => {
+      if (autoCancelledRef.current.has(order.id)) return
+      autoCancelledRef.current.add(order.id)
+      const reason = 'Order not accepted within 10 minutes — auto-cancelled'
+      const cancelledAt = new Date().toISOString()
+      const { data, error } = await supabase
+        .from('orders')
+        .update({ status: 'cancelled', cancellation_reason: reason, cancelled_at: cancelledAt })
+        .eq('id', order.id)
+        .select('id')
+      if (!error && data && data.length > 0) {
+        patchLocal(order.id, { status: 'cancelled', cancellation_reason: reason, cancelled_at: cancelledAt })
+        notifyCustomer(order, {
+          title: '❌ Order Cancelled',
+          body: 'Your order was not accepted in time and has been automatically cancelled.',
+        })
+      } else {
+        // If the DB write failed, remove from the set so we retry next tick.
+        autoCancelledRef.current.delete(order.id)
+      }
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingOverdueOrders.map((o) => o.id).join(',')])
+
   // Prime the checklist once per selected order, as soon as its data is
   // available. Pending orders start with every in-stock item checked (only
   // items already flagged unavailable stay unchecked) so the manager just
@@ -903,9 +944,10 @@ export default function Orders() {
     // rider is assigned to a ready order), there's no error yet zero rows
     // change — without this we'd fake success and the realtime reload would
     // snap the order straight back to 'ready'.
+    const cancelledAt = new Date().toISOString()
     const { data, error } = await supabase
       .from('orders')
-      .update({ status: 'cancelled', cancellation_reason: reason })
+      .update({ status: 'cancelled', cancellation_reason: reason, cancelled_at: cancelledAt })
       .eq('id', order.id)
       .select('id')
     setBusy(null)
@@ -922,7 +964,7 @@ export default function Orders() {
       )
       return
     }
-    patchLocal(order.id, { status: 'cancelled', cancellation_reason: reason })
+    patchLocal(order.id, { status: 'cancelled', cancellation_reason: reason, cancelled_at: cancelledAt })
     notifyCustomer(order, { title: '❌ Order Cancelled', body: 'Your order was cancelled by the restaurant.' })
     setCancelTarget(null)
     // Select another active order
@@ -1185,6 +1227,12 @@ export default function Orders() {
                 const isExpired = isPreparing && remainingMs != null && remainingMs <= 0
                 const isAlarming = isExpired && nowTs - readyTs < ALARM_MS
 
+                // Pending orders: countdown to the 10-min auto-cancel deadline.
+                const isPending = o.status === 'pending' && !isAwaitingCustomer(o)
+                const cancelDeadlineTs = new Date(o.created_at).getTime() + AUTO_CANCEL_MINUTES * 60000
+                const cancelRemainingMs = isPending ? cancelDeadlineTs - nowTs : null
+                const cancelSoonWarning = cancelRemainingMs != null && cancelRemainingMs > 0 && cancelRemainingMs <= 3 * 60000
+
                 return (
                   <div
                     key={o.id}
@@ -1241,7 +1289,6 @@ export default function Orders() {
                       </span>
                     </div>
 
-                    {/* Tags + order total */}
                     <div className="mt-1 flex items-center justify-between gap-2">
                       <div className="flex flex-wrap items-center gap-1">
                         <span className="rounded bg-line-soft px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-ink-soft">
@@ -1259,7 +1306,6 @@ export default function Orders() {
                         )}
                       </div>
                       <div className="flex shrink-0 items-center gap-2">
-                        {/* Prep countdown + inline Mark Ready on preparing cards */}
                         {isPreparing ? (
                           <div className="flex flex-col items-end gap-1">
                             {remainingMs != null && (
@@ -1286,6 +1332,19 @@ export default function Orders() {
                             </button>
                           </div>
                         ) : null}
+                        {isPending && cancelRemainingMs != null && cancelRemainingMs > 0 && (
+                          <span
+                            className={`flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-bold tabular-nums ${
+                              cancelSoonWarning
+                                ? 'bg-red-100 text-red-700 animate-pulse'
+                                : 'border border-amber-200 bg-amber-50 text-amber-700'
+                            }`}
+                            title="Order will be auto-cancelled if not accepted in time"
+                          >
+                            <Clock className="h-2.5 w-2.5" />
+                            {fmtCountdown(cancelRemainingMs)}
+                          </span>
+                        )}
                         <span className="text-sm font-bold text-ink">₹{o.total}</span>
                       </div>
                     </div>

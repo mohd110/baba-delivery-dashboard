@@ -84,13 +84,26 @@ export default function Sidebar() {
   return (
     <aside className="flex h-full w-[260px] shrink-0 flex-col justify-between border-r border-line bg-white py-6 shadow-[1px_0_1px_rgba(0,0,0,0.05)]">
       {/* Logo */}
-      <div className="flex flex-col gap-1 px-6 pb-6">
-        <p className="text-[34px] font-bold leading-[42px] tracking-[-0.9px] text-brand [word-break:break-word]">
-          Wali Baba Foods
-        </p>
-        <p className="text-xs font-semibold uppercase leading-4 tracking-[1.2px] text-ink-soft">
-          Restaurant Admin
-        </p>
+      <div className="flex items-center gap-3 px-6 pb-6">
+        <img
+          src="/assets/walibaba logo.jpeg"
+          onError={(e) => {
+            if (!e.currentTarget.dataset.triedFallback) {
+              e.currentTarget.dataset.triedFallback = 'true'
+              e.currentTarget.src = '/assets/logo.png'
+            }
+          }}
+          alt="Wali Baba Foods"
+          className="h-12 w-12 shrink-0 rounded-full object-cover shadow-md ring-2 ring-brand/20"
+        />
+        <div className="flex flex-col overflow-hidden">
+          <p className="text-[20px] font-bold leading-[24px] tracking-tight text-brand [word-break:break-word]">
+            Wali Baba Foods
+          </p>
+          <p className="text-[10px] font-semibold uppercase leading-4 tracking-[1.2px] text-ink-soft">
+            Restaurant Admin
+          </p>
+        </div>
       </div>
 
       {/* Nav */}
