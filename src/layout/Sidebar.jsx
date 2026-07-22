@@ -94,14 +94,14 @@ export default function Sidebar() {
             }
           }}
           alt="Wali Baba Foods"
-          className="h-14 w-12 shrink-0 object-contain"
+          className="h-16 w-16 shrink-0 object-contain"
         />
         <div className="flex flex-col overflow-hidden">
           <p className="text-[20px] font-bold leading-[24px] tracking-tight text-brand [word-break:break-word]">
             Wali Baba Foods
           </p>
           <p className="text-[10px] font-semibold uppercase leading-4 tracking-[1.2px] text-ink-soft">
-            Restaurant Admin
+            Delivery Admin
           </p>
         </div>
       </div>

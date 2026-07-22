@@ -42,7 +42,7 @@ export default function Login() {
           />
           <h1 className="text-2xl font-bold leading-tight tracking-tight text-brand">Wali Baba Foods</h1>
           <p className="mt-1 text-xs font-semibold uppercase tracking-[1.2px] text-ink-soft">
-            Restaurant Admin
+            Delivery Admin
           </p>
         </div>
 

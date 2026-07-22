@@ -944,7 +944,7 @@ export default function Menu() {
           value={searchQuery} onChange={handleSearch} />
         <div className="flex items-center gap-1">
           <TopIcons /><Divider />
-          <ProfileChip name="Wali Baba Foods" sub="Restaurant Admin" />
+          <ProfileChip name="Wali Baba Foods" sub="Delivery Admin" />
         </div>
       </Topbar>
 

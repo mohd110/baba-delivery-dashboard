@@ -57,7 +57,7 @@ export function Divider() {
   return <div className="mx-1 h-6 w-px bg-line" />
 }
 
-export function ProfileChip({ name = 'Wali Baba Foods', sub = 'Restaurant Admin', img, initials, initialsBg = 'bg-brand' }) {
+export function ProfileChip({ name = 'Wali Baba Foods', sub = 'Delivery Admin', img, initials, initialsBg = 'bg-brand' }) {
   const logoSrc = img || '/assets/walibaba logo.jpeg'
   return (
     <div className="flex items-center gap-3">

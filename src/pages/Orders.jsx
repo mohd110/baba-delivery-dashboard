@@ -76,6 +76,17 @@ function fmtCountdown(ms) {
   return `${over ? '+' : ''}${m}:${String(s).padStart(2, '0')}`
 }
 
+// Human-readable "how late" for the persistent late badge: minutes + seconds
+// once past a minute, otherwise just seconds. Ticks live off nowTs so the
+// badge keeps counting up for as long as the order stays overdue.
+function fmtLateBy(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000))
+  const m = Math.floor(total / 60)
+  const s = total % 60
+  if (m < 1) return `${s} sec`
+  return s > 0 ? `${m} min ${s} sec` : `${m} min`
+}
+
 // Minutes added to eta_minutes when the manager snoozes an expired prep timer.
 const SNOOZE_MIN = 5
 // How long the card blinks and the buzzer sounds after a timer runs out.
@@ -848,11 +859,11 @@ export default function Orders() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lateIdsKey])
 
-  // While anything stays late, keep nagging by voice on an interval (like
-  // Zomato) until it's marked ready, snoozed or the alert is muted.
+  // While anything stays late, keep nagging by voice every 5s (like Zomato)
+  // until it's marked ready, snoozed or the alert is muted.
   useEffect(() => {
     if (lateCount === 0 || soundMuted) return
-    const id = setInterval(() => speakLate(lateCount), 25000)
+    const id = setInterval(() => speakLate(lateCount), 5000)
     return () => clearInterval(id)
   }, [lateCount, soundMuted])
 
@@ -1372,10 +1383,11 @@ export default function Orders() {
                       </div>
                     </div>
 
-                    {/* Late alert: blinks for as long as the prep timer stays overdue. */}
+                    {/* Late alert: persists and keeps counting up for as long as
+                        the prep timer stays overdue (doesn't vanish with the popup). */}
                     {isExpired && (
                       <div className="animate-alarm flex items-center gap-1.5 self-start rounded-md px-2 py-1 text-[11px] font-extrabold uppercase tracking-wide">
-                        <AlertTriangle className="h-3.5 w-3.5" /> Order Late
+                        <AlertTriangle className="h-3.5 w-3.5" /> Order Late · by {fmtLateBy(nowTs - readyTs)}
                       </div>
                     )}
 
