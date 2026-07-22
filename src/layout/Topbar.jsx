@@ -70,7 +70,7 @@ export function ProfileChip({ name = 'Wali Baba Foods', sub = 'Restaurant Admin'
           }
         }}
         alt={name}
-        className="h-9 w-9 shrink-0 rounded-full bg-line-2 object-cover ring-2 ring-brand/15 shadow-sm"
+        className="h-10 w-9 shrink-0 object-contain"
       />
       <div className="flex flex-col leading-tight">
         <span className="text-sm font-semibold text-ink">{name}</span>

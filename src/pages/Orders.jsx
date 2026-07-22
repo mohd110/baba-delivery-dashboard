@@ -20,6 +20,9 @@ import {
   X,
   PackageX,
   Hourglass,
+  AlertTriangle,
+  Bell,
+  BellOff,
 } from 'lucide-react'
 import Topbar, { TopIcons } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
@@ -116,6 +119,46 @@ function stopBuzzer() {
   if (_buzzTimer) {
     clearInterval(_buzzTimer)
     _buzzTimer = null
+  }
+}
+
+// --- Late-order voice announcement (Zomato-style) --------------------------
+// Speaks a short "order running late" phrase using the browser's speech
+// synthesis. cancel() first so repeated calls never queue up a backlog.
+function speakLate(count) {
+  try {
+    const synth = window.speechSynthesis
+    if (!synth) return
+    const phrase =
+      count > 1 ? `${count} orders are running late` : 'One order is running late'
+    const u = new SpeechSynthesisUtterance(phrase)
+    u.rate = 1
+    u.pitch = 1
+    u.volume = 1
+    synth.cancel()
+    synth.speak(u)
+  } catch {
+    /* speech unavailable — silently ignore */
+  }
+}
+function stopSpeaking() {
+  try { window.speechSynthesis?.cancel() } catch { /* ignore */ }
+}
+
+// Fire a one-off desktop notification for a newly-late order so the manager
+// is alerted even when the dashboard tab isn't focused. No-op without
+// permission (requested once on mount).
+function notifyLateDesktop(order) {
+  try {
+    if (!('Notification' in window) || Notification.permission !== 'granted') return
+    const n = new Notification('⏰ Order running late', {
+      body: `Order ${orderCode(order)} has passed its prep time. Mark it ready or add time.`,
+      tag: `late-${order.id}`,
+      requireInteraction: true,
+    })
+    n.onclick = () => { try { window.focus() } catch { /* ignore */ } n.close() }
+  } catch {
+    /* notifications unavailable — silently ignore */
   }
 }
 
@@ -612,6 +655,18 @@ export default function Orders() {
   const [etaCustom, setEtaCustom] = useState('')
   // Ticks once per second to drive the live prep-time countdowns.
   const [nowTs, setNowTs] = useState(() => Date.now())
+  // Mute for the late-order buzzer + voice announcement (visual blink stays).
+  // Persisted so a staffer's choice survives a page reload.
+  const [soundMuted, setSoundMuted] = useState(() => {
+    try { return localStorage.getItem('lateAlertMuted') === '1' } catch { return false }
+  })
+  const toggleMute = () =>
+    setSoundMuted((m) => {
+      const next = !m
+      try { localStorage.setItem('lateAlertMuted', next ? '1' : '0') } catch { /* ignore */ }
+      if (next) { stopBuzzer(); stopSpeaking() }
+      return next
+    })
 
   // Restaurant open/closed state (shared with Outlets + Settings).
   const {
@@ -749,14 +804,57 @@ export default function Orders() {
   const alarmOrder = expiredOrders[0] || null
   // Blink + buzz only for the first minute after a timer runs out.
   const alarmActive = alarmOrder != null && nowTs - readyByTs(alarmOrder) < ALARM_MS
+  // Every overdue preparing order counts as "late" for the badge, voice and
+  // desktop notification — these persist for as long as the order stays late
+  // (the loud buzzer above still only fires for the first minute).
+  const lateOrders = expiredOrders
+  const lateCount = lateOrders.length
 
-  // Run the buzzer while an alarm is active; stop as soon as it clears.
+  // Run the buzzer while an alarm is active; stop as soon as it clears or the
+  // manager mutes the alert.
   useEffect(() => {
-    if (alarmActive) startBuzzer()
+    if (alarmActive && !soundMuted) startBuzzer()
     else stopBuzzer()
-  }, [alarmActive])
-  // Belt-and-braces: silence the buzzer if the page unmounts.
-  useEffect(() => () => stopBuzzer(), [])
+  }, [alarmActive, soundMuted])
+  // Belt-and-braces: silence the buzzer + voice if the page unmounts.
+  useEffect(() => () => { stopBuzzer(); stopSpeaking() }, [])
+
+  // Ask for desktop-notification permission once, so late orders can alert the
+  // manager even when the dashboard tab is in the background.
+  useEffect(() => {
+    try {
+      if ('Notification' in window && Notification.permission === 'default') {
+        Notification.requestPermission().catch(() => {})
+      }
+    } catch { /* ignore */ }
+  }, [])
+
+  // Announce each order the moment it goes late: one desktop notification per
+  // order plus a spoken alert. Ids drop out of the ref when no longer late so a
+  // recurring lateness re-announces. Keyed on the set of late-order ids.
+  const announcedLateRef = useRef(new Set())
+  const lateIdsKey = lateOrders.map((o) => o.id).join(',')
+  useEffect(() => {
+    const liveLate = new Set(lateOrders.map((o) => o.id))
+    for (const id of announcedLateRef.current) {
+      if (!liveLate.has(id)) announcedLateRef.current.delete(id)
+    }
+    const freshlyLate = lateOrders.filter((o) => !announcedLateRef.current.has(o.id))
+    freshlyLate.forEach((o) => {
+      announcedLateRef.current.add(o.id)
+      notifyLateDesktop(o)
+    })
+    if (freshlyLate.length > 0 && !soundMuted) speakLate(lateCount)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lateIdsKey])
+
+  // While anything stays late, keep nagging by voice on an interval (like
+  // Zomato) until it's marked ready, snoozed or the alert is muted.
+  useEffect(() => {
+    if (lateCount === 0 || soundMuted) return
+    const id = setInterval(() => speakLate(lateCount), 25000)
+    return () => clearInterval(id)
+  }, [lateCount, soundMuted])
 
   // ── Auto-cancel pending orders that haven't been accepted in time ──────
   // Derive which pending orders have sat unaccepted past AUTO_CANCEL_MINUTES.
@@ -1094,6 +1192,21 @@ export default function Orders() {
           </button>
           <button
             type="button"
+            onClick={toggleMute}
+            title={soundMuted ? 'Late-order sound is muted — click to unmute' : 'Mute the late-order alarm & voice'}
+            className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors ${
+              lateCount > 0 && !soundMuted
+                ? 'border-brand/30 bg-brand-light text-brand'
+                : soundMuted
+                  ? 'border-line bg-canvas text-ink-soft'
+                  : 'border-line text-ink-soft hover:bg-canvas'
+            }`}
+          >
+            {soundMuted ? <BellOff className="h-4 w-4" /> : <Bell className="h-4 w-4" />}
+            {lateCount > 0 ? `${lateCount} Late` : soundMuted ? 'Muted' : 'Alerts'}
+          </button>
+          <button
+            type="button"
             onClick={sendTestNotification}
             className="flex items-center gap-1.5 rounded-lg border border-line px-3 py-1.5 text-xs font-semibold text-ink-soft hover:bg-canvas"
           >
@@ -1252,12 +1365,19 @@ export default function Orders() {
                         <OrderIdLabel order={o} className="truncate" />
                       </span>
                       <div className="flex shrink-0 items-center gap-1.5">
-                        <Clock className={`h-3 w-3 ${isLate ? 'text-brand animate-pulse' : 'text-ink-soft'}`} />
-                        <span className={`text-xs font-semibold ${isLate ? 'text-brand font-bold' : 'text-ink-soft'}`}>
+                        <Clock className={`h-3 w-3 ${isLate || isExpired ? 'text-brand animate-pulse' : 'text-ink-soft'}`} />
+                        <span className={`text-xs font-semibold ${isLate || isExpired ? 'text-brand font-bold' : 'text-ink-soft'}`}>
                           {elapsedMin}
                         </span>
                       </div>
                     </div>
+
+                    {/* Late alert: blinks for as long as the prep timer stays overdue. */}
+                    {isExpired && (
+                      <div className="animate-alarm flex items-center gap-1.5 self-start rounded-md px-2 py-1 text-[11px] font-extrabold uppercase tracking-wide">
+                        <AlertTriangle className="h-3.5 w-3.5" /> Order Late
+                      </div>
+                    )}
 
                     {/* Contact number */}
                     <div className="flex items-baseline gap-2 text-xs">
