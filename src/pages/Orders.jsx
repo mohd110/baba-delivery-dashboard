@@ -678,6 +678,16 @@ export default function Orders() {
       if (next) { stopBuzzer(); stopSpeaking() }
       return next
     })
+  // Order-ids whose "Time's up!" popup the manager has dismissed. Dismissing
+  // only closes the blocking modal — the card keeps its blinking "Order Late"
+  // label and the voice keeps announcing. Ids are pruned once the order is no
+  // longer late so a fresh lateness re-opens the popup.
+  const [dismissedAlarms, setDismissedAlarms] = useState(() => new Set())
+  // id -> original ready-by timestamp, captured the first moment an order goes
+  // overdue. Kept even when the manager adds prep time, so a snoozed order stays
+  // counted as late (timed from its original due time). Cleared when the order
+  // leaves 'preparing'. Maintained in an effect — never mutated during render.
+  const [lateSince, setLateSince] = useState(() => new Map())
 
   // Restaurant open/closed state (shared with Outlets + Settings).
   const {
@@ -806,20 +816,43 @@ export default function Orders() {
   // clears automatically when you switch to a tab that doesn't contain it.
   const selectedOrder = filteredOrders.find(o => o.id === selectedOrderId)
 
-  // Preparing orders whose prep countdown has run out (ready-by time passed),
-  // most-overdue first. These drive the blink, buzzer and mark-ready prompt.
-  const expiredOrders = activeOrders
-    .filter((o) => o.status === 'preparing' && readyByTs(o) != null && nowTs >= readyByTs(o))
-    .sort((a, b) => readyByTs(a) - readyByTs(b))
-  // The order shown in the mark-ready prompt (the most overdue one).
-  const alarmOrder = expiredOrders[0] || null
-  // Blink + buzz only for the first minute after a timer runs out.
-  const alarmActive = alarmOrder != null && nowTs - readyByTs(alarmOrder) < ALARM_MS
-  // Every overdue preparing order counts as "late" for the badge, voice and
-  // desktop notification — these persist for as long as the order stays late
-  // (the loud buzzer above still only fires for the first minute).
-  const lateOrders = expiredOrders
+  // Time an order is judged "late" against: the original ready-by timestamp
+  // captured the first moment it went overdue (see the maintenance effect
+  // below). Kept even if the manager adds prep time — so adding 5 minutes still
+  // counts as late time, measured from the original due time, not reset.
+  const lateAnchorOf = (o) => lateSince.get(o.id) ?? null
+  // Late = a preparing order past its (original) ready-by time, most-overdue
+  // first. Drives the blinking card label, buzzer, voice and desktop alert —
+  // all persist for as long as the order stays late.
+  const lateOrders = activeOrders
+    .filter((o) => o.status === 'preparing' && lateAnchorOf(o) != null)
+    .sort((a, b) => lateAnchorOf(a) - lateAnchorOf(b))
   const lateCount = lateOrders.length
+  // The order shown in the mark-ready popup (the most overdue one the manager
+  // hasn't dismissed). Dismissing/snoozing never clears the persistent label.
+  const alarmOrder = lateOrders.find((o) => !dismissedAlarms.has(o.id)) || null
+  // Loud buzzer only for the first minute after an order first goes late.
+  const alarmActive = alarmOrder != null && nowTs - lateAnchorOf(alarmOrder) < ALARM_MS
+
+  // Maintain the late-anchor map: capture each preparing order's ready-by time
+  // the first moment it goes overdue, and forget orders that have left
+  // 'preparing'. Runs each tick (nowTs) so lateness is detected within a second.
+  useEffect(() => {
+    setLateSince((prev) => {
+      let next = prev
+      const ensure = () => { if (next === prev) next = new Map(prev) }
+      const prep = activeOrders.filter((o) => o.status === 'preparing')
+      const liveIds = new Set(prep.map((o) => o.id))
+      prep.forEach((o) => {
+        const rb = readyByTs(o)
+        if (rb != null && nowTs >= rb && !prev.has(o.id)) { ensure(); next.set(o.id, rb) }
+      })
+      for (const id of prev.keys()) {
+        if (!liveIds.has(id)) { ensure(); next.delete(id) }
+      }
+      return next
+    })
+  }, [nowTs, activeOrders])
 
   // Run the buzzer while an alarm is active; stop as soon as it clears or the
   // manager mutes the alert.
@@ -856,11 +889,23 @@ export default function Orders() {
       notifyLateDesktop(o)
     })
     if (freshlyLate.length > 0 && !soundMuted) speakLate(lateCount)
+    // Prune dismissed ids that are no longer late, so if the same order goes
+    // late again later its popup re-opens.
+    setDismissedAlarms((prev) => {
+      if (prev.size === 0) return prev
+      let changed = false
+      const next = new Set()
+      for (const id of prev) {
+        if (liveLate.has(id)) next.add(id)
+        else changed = true
+      }
+      return changed ? next : prev
+    })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lateIdsKey])
 
   // While anything stays late, keep nagging by voice every 5s (like Zomato)
-  // until it's marked ready, snoozed or the alert is muted.
+  // until it's marked ready or the alert is muted (snoozing keeps it late).
   useEffect(() => {
     if (lateCount === 0 || soundMuted) return
     const id = setInterval(() => speakLate(lateCount), 5000)
@@ -1008,8 +1053,11 @@ export default function Orders() {
 
   // Snooze an expired prep timer by adding 5 minutes. Writing eta_minutes back
   // to the DB pushes the new ready-by time to the customer app automatically.
+  // The order stays flagged as late (timed from its original due time) — adding
+  // time only closes the popup, it doesn't reset the late clock.
   const addPrepTime = async (order) => {
     if (!order) return
+    setDismissedAlarms((s) => new Set(s).add(order.id))
     const prev = order.eta_minutes || 0
     const next = prev + SNOOZE_MIN
     patchLocal(order.id, { eta_minutes: next })
@@ -1348,8 +1396,13 @@ export default function Orders() {
                 const isPreparing = activeTab === 'preparing' && o.status === 'preparing'
                 const readyTs = readyByTs(o)
                 const remainingMs = readyTs != null ? readyTs - nowTs : null
-                const isExpired = isPreparing && remainingMs != null && remainingMs <= 0
-                const isAlarming = isExpired && nowTs - readyTs < ALARM_MS
+                // Anchor-based lateness: once an order passes its original
+                // ready-by time it stays late (and keeps counting up) even if
+                // prep time was added. lateSince is maintained by an effect.
+                const lateAnchor = isPreparing ? (lateSince.get(o.id) ?? null) : null
+                const isExpired = lateAnchor != null
+                const lateByMs = isExpired ? nowTs - lateAnchor : 0
+                const isAlarming = isExpired && lateByMs < ALARM_MS
 
                 // Pending orders: countdown to the 10-min auto-cancel deadline.
                 const isPending = o.status === 'pending' && !isAwaitingCustomer(o)
@@ -1387,7 +1440,7 @@ export default function Orders() {
                         the prep timer stays overdue (doesn't vanish with the popup). */}
                     {isExpired && (
                       <div className="animate-alarm flex items-center gap-1.5 self-start rounded-md px-2 py-1 text-[11px] font-extrabold uppercase tracking-wide">
-                        <AlertTriangle className="h-3.5 w-3.5" /> Order Late · by {fmtLateBy(nowTs - readyTs)}
+                        <AlertTriangle className="h-3.5 w-3.5" /> Order Late · by {fmtLateBy(lateByMs)}
                       </div>
                     )}
 
@@ -1451,7 +1504,7 @@ export default function Orders() {
                                 }`}
                               >
                                 <Clock className="h-2.5 w-2.5" />
-                                {isExpired ? `Overdue ${fmtCountdown(remainingMs)}` : fmtCountdown(remainingMs)}
+                                {isExpired ? `Overdue ${fmtCountdown(-lateByMs)}` : fmtCountdown(remainingMs)}
                               </span>
                             )}
                             <button
@@ -1870,17 +1923,27 @@ export default function Orders() {
       {alarmOrder && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
           <div className="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl">
-            <div className="flex items-center gap-3 border-b border-line bg-brand-light p-5">
-              <span className={`rounded-xl bg-brand p-2.5 text-white ${alarmActive ? 'animate-pulse' : ''}`}>
-                <Clock className="h-6 w-6" />
-              </span>
-              <div>
-                <h3 className="text-lg font-bold text-brand">Time&apos;s up!</h3>
-                <p className="text-xs font-semibold text-ink-soft">
-                  Order <OrderIdLabel order={alarmOrder} /> is overdue by{' '}
-                  {fmtCountdown(readyByTs(alarmOrder) - nowTs).replace('+', '')}
-                </p>
+            <div className="flex items-center justify-between gap-3 border-b border-line bg-brand-light p-5">
+              <div className="flex items-center gap-3">
+                <span className={`rounded-xl bg-brand p-2.5 text-white ${alarmActive ? 'animate-pulse' : ''}`}>
+                  <Clock className="h-6 w-6" />
+                </span>
+                <div>
+                  <h3 className="text-lg font-bold text-brand">Time&apos;s up!</h3>
+                  <p className="text-xs font-semibold text-ink-soft">
+                    Order <OrderIdLabel order={alarmOrder} /> is overdue by{' '}
+                    {fmtCountdown(lateAnchorOf(alarmOrder) - nowTs).replace('+', '')}
+                  </p>
+                </div>
               </div>
+              <button
+                type="button"
+                onClick={() => setDismissedAlarms((s) => new Set(s).add(alarmOrder.id))}
+                title="Dismiss — the order stays flagged as late on its card"
+                className="shrink-0 rounded-lg p-1.5 text-brand hover:bg-white/60 transition-colors"
+              >
+                <X className="h-5 w-5" />
+              </button>
             </div>
             <div className="p-5">
               <p className="text-sm text-ink-soft">
