@@ -28,7 +28,7 @@ import Topbar, { TopIcons } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
 import { orderCode } from '../lib/format.js'
 import { OrderIdLabel } from '../components/OrderIdLabel.jsx'
-import { useRestaurant, isAutoScheduleOn } from '../lib/restaurant.js'
+import { useRestaurant, isAutoScheduleOn, setAutoScheduleOn } from '../lib/restaurant.js'
 
 function imgFor(name = '', photoUrl) {
   if (photoUrl) return photoUrl
@@ -606,9 +606,7 @@ const CLOSE_REASONS = [
   'High order rush / Kitchen is full',
   'Kitchen staff not available',
   'Nearing closing time',
-  'Outlet timings are not correct',
   'Temporarily closed',
-  'Issues with menu',
   'Closed due to LPG shortage',
   'Others',
 ]
@@ -703,17 +701,18 @@ export default function Orders() {
 
   const toggleStore = async () => {
     if (storeBusy || storeLoading) return
-    // Outside opening hours the switch is inert — the clock decides (see handoff).
-    if (closedReason === 'hours') return
-    if (storeOpen) {
+    if (effectiveOpen) {
       // Closing: collect a reason first so the customer app can show it.
       setCloseReasonChoice(CLOSE_REASONS[0])
       setCloseReasonNote('')
       setShowCloseReason(true)
       return
     }
-    // Re-opening: no reason needed.
+    // Opening. A manual open always wins over the schedule: taking manual
+    // control switches auto-schedule off so neither the clock nor the
+    // ScheduleEnforcer can flip the store back until staff re-enable it.
     setStoreBusy(true)
+    if (autoSchedule) setAutoScheduleOn(false)
     const { error } = await setStoreOpen(true)
     setStoreBusy(false)
     if (error) alert(`Could not update restaurant status: ${error.message}`)
@@ -725,6 +724,9 @@ export default function Orders() {
     const reason = [base, note].filter(Boolean).join(' — ')
     if (!reason) { alert('Please pick a reason or write a short note.'); return }
     setStoreBusy(true)
+    // Manual close takes manual control: switch auto-schedule off so the
+    // ScheduleEnforcer can't immediately re-open the store during trading hours.
+    if (autoSchedule) setAutoScheduleOn(false)
     const { error } = await setStoreOpen(false, reason, note || null)
     setStoreBusy(false)
     if (error) { alert(`Could not update restaurant status: ${error.message}`); return }
@@ -828,6 +830,7 @@ export default function Orders() {
     .filter((o) => o.status === 'preparing' && lateAnchorOf(o) != null)
     .sort((a, b) => lateAnchorOf(a) - lateAnchorOf(b))
   const lateCount = lateOrders.length
+  const lateIdsKey = lateOrders.map((o) => o.id).join(',')
   // The order shown in the mark-ready popup (the most overdue one the manager
   // hasn't dismissed). Dismissing/snoozing never clears the persistent label.
   const alarmOrder = lateOrders.find((o) => !dismissedAlarms.has(o.id)) || null
@@ -837,6 +840,8 @@ export default function Orders() {
   // Maintain the late-anchor map: capture each preparing order's ready-by time
   // the first moment it goes overdue, and forget orders that have left
   // 'preparing'. Runs each tick (nowTs) so lateness is detected within a second.
+  // A persisted `late_since` (see the effect below) is preferred so the anchor
+  // survives page reloads and snoozes — falling back to the live ready-by time.
   useEffect(() => {
     setLateSince((prev) => {
       let next = prev
@@ -844,8 +849,11 @@ export default function Orders() {
       const prep = activeOrders.filter((o) => o.status === 'preparing')
       const liveIds = new Set(prep.map((o) => o.id))
       prep.forEach((o) => {
+        if (prev.has(o.id)) return
+        const persisted = o.late_since ? new Date(o.late_since).getTime() : null
+        if (persisted != null && !Number.isNaN(persisted)) { ensure(); next.set(o.id, persisted); return }
         const rb = readyByTs(o)
-        if (rb != null && nowTs >= rb && !prev.has(o.id)) { ensure(); next.set(o.id, rb) }
+        if (rb != null && nowTs >= rb) { ensure(); next.set(o.id, rb) }
       })
       for (const id of prev.keys()) {
         if (!liveIds.has(id)) { ensure(); next.delete(id) }
@@ -853,6 +861,31 @@ export default function Orders() {
       return next
     })
   }, [nowTs, activeOrders])
+
+  // Persist the late anchor to the DB the first time an order goes late, so a
+  // page reload (or snooze) keeps it flagged late timed from its original due
+  // time. Degrades gracefully: if the `late_since` column doesn't exist yet the
+  // feature just stays in-session (one failed write, then it stops trying).
+  const lateColumnMissingRef = useRef(false)
+  const persistedLateRef = useRef(new Set())
+  useEffect(() => {
+    if (lateColumnMissingRef.current) return
+    lateOrders.forEach(async (o) => {
+      if (o.late_since || persistedLateRef.current.has(o.id)) return
+      const anchor = lateAnchorOf(o)
+      if (anchor == null) return
+      persistedLateRef.current.add(o.id)
+      const iso = new Date(anchor).toISOString()
+      const { error } = await supabase.from('orders').update({ late_since: iso }).eq('id', o.id)
+      if (error) {
+        if (/late_since|column|schema cache/i.test(error.message)) lateColumnMissingRef.current = true
+        // keep the id in the ref so we don't hammer the DB retrying every tick
+      } else {
+        setOrders((prev) => prev.map((x) => (x.id === o.id ? { ...x, late_since: iso } : x)))
+      }
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lateIdsKey])
 
   // Run the buzzer while an alarm is active; stop as soon as it clears or the
   // manager mutes the alert.
@@ -877,7 +910,6 @@ export default function Orders() {
   // order plus a spoken alert. Ids drop out of the ref when no longer late so a
   // recurring lateness re-announces. Keyed on the set of late-order ids.
   const announcedLateRef = useRef(new Set())
-  const lateIdsKey = lateOrders.map((o) => o.id).join(',')
   useEffect(() => {
     const liveLate = new Set(lateOrders.map((o) => o.id))
     for (const id of announcedLateRef.current) {
@@ -999,13 +1031,18 @@ export default function Orders() {
       patch.accepted_at = new Date().toISOString()
       if (opts.etaMinutes != null) patch.eta_minutes = opts.etaMinutes
     }
+    // Stamp the moment the kitchen marks the order ready — powers the "Ready"
+    // step of the customer app's order timeline.
+    if (action.to === 'ready') {
+      patch.ready_at = new Date().toISOString()
+    }
     setBusy(order.id)
     let appliedPatch = patch
     let { error } = await supabase.from('orders').update(patch).eq('id', order.id)
-    // If the optional columns (eta_minutes / accepted_at) aren't there yet,
-    // retry without them so accepting orders still works.
-    if (error && /eta_minutes|accepted_at|schema cache|column/i.test(error.message)) {
-      const { eta_minutes: _eta, accepted_at: _acc, ...rest } = patch
+    // If the optional columns (eta_minutes / accepted_at / ready_at) aren't
+    // there yet, retry without them so advancing orders still works.
+    if (error && /eta_minutes|accepted_at|ready_at|schema cache|column/i.test(error.message)) {
+      const { eta_minutes: _eta, accepted_at: _acc, ready_at: _rdy, ...rest } = patch
       appliedPatch = rest
       ;({ error } = await supabase.from('orders').update(rest).eq('id', order.id))
     }
@@ -1217,12 +1254,12 @@ export default function Orders() {
             role="switch"
             aria-checked={effectiveOpen}
             onClick={toggleStore}
-            disabled={storeBusy || storeLoading || storeClosedHours}
+            disabled={storeBusy || storeLoading}
             title={
               storeClosedHours
-                ? 'Outside opening hours — change closing time in Settings to trade later'
+                ? 'Auto-closed by schedule — click to open now (takes manual control)'
                 : autoSchedule
-                  ? 'Auto open/close is on — set hours in Settings'
+                  ? 'Auto open/close is on — toggling here overrides the schedule'
                   : 'Toggle whether the restaurant is accepting orders'
             }
             className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors disabled:opacity-60 ${

@@ -33,15 +33,18 @@ export function isWithinOpenHours(now, open, close) {
   return cur >= o || cur < c // wraps past midnight
 }
 
-// Effective closed state — kept in step with the customer app. The clock wins,
-// then the manual switch:
-//   outside opening hours -> 'hours'   (normal schedule; "Opens at …")
-//   is_open === false     -> 'manual'  (staff closed early; "Back soon")
-//   otherwise             -> null      (open)
-// The manual switch can only close *early*; it can't trade past closing_time.
-export function getClosedReason(open, close, isOpen, now = new Date()) {
-  if (!isWithinOpenHours(now, open, close)) return 'hours'
+// Effective closed state — kept in step with the customer app. The MANUAL
+// switch has priority over the schedule:
+//   is_open === false                     -> 'manual'  (staff closed; "Back soon")
+//   auto-schedule on & outside open hours -> 'hours'   ("Opens at …")
+//   otherwise                             -> null      (open)
+// With auto-schedule OFF (the default) the manual switch is the sole authority
+// and the store trades around the clock until staff close it. When it's ON, the
+// schedule can auto-close the store, but staff can always re-open from the
+// Active Orders toggle (which takes manual control).
+export function getClosedReason(open, close, isOpen, now = new Date(), autoSchedule = false) {
   if (!isOpen) return 'manual'
+  if (autoSchedule && !isWithinOpenHours(now, open, close)) return 'hours'
   return null
 }
 
@@ -88,8 +91,9 @@ export function useRestaurant() {
   const openTime = primary?.opening_time || DEFAULT_OPEN
   const closeTime = primary?.closing_time || DEFAULT_CLOSE
 
-  // Effective state the customer app also derives (clock wins, then the switch).
-  const closedReason = getClosedReason(openTime, closeTime, isOpen, now)
+  // Effective state the customer app also derives (manual switch wins; the
+  // schedule only auto-closes when auto-schedule is enabled on this device).
+  const closedReason = getClosedReason(openTime, closeTime, isOpen, now, isAutoScheduleOn())
   const effectiveOpen = closedReason === null
   // The staff-chosen close reason persisted on the row (for display/echo).
   const closedReasonText = primary?.closed_reason || null
