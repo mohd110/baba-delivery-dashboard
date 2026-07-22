@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import Topbar, { TopIcons } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
+import { supportsWebp } from '../lib/compressImage.js'
 
 // Hero slideshow images live in this bucket — never inline in the DB row.
 const BUCKET = 'banner-photos'
@@ -58,10 +59,12 @@ async function compressBanner(file) {
     ctx.imageSmoothingEnabled = true
     ctx.imageSmoothingQuality = 'high'
     ctx.drawImage(img, 0, 0, w, h)
-    const blob = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', JPEG_QUALITY))
+    const webp = supportsWebp()
+    const type = webp ? 'image/webp' : 'image/jpeg'
+    const blob = await new Promise((res) => canvas.toBlob(res, type, JPEG_QUALITY))
     if (!blob) return { file, portrait }
     const base = (file.name || 'banner').replace(/\.\w+$/, '')
-    return { file: new File([blob], `${base}.jpg`, { type: 'image/jpeg' }), portrait }
+    return { file: new File([blob], `${base}.${webp ? 'webp' : 'jpg'}`, { type }), portrait }
   } catch {
     return { file, portrait: false } // any canvas failure -> keep the original
   } finally {
@@ -73,9 +76,10 @@ async function compressBanner(file) {
  * uploader, we never fall back to a base64 data-URI — on failure we throw so the
  * caller can surface the error and the row only ever stores a short bucket URL. */
 async function uploadBanner(file) {
-  const path = `banners/${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`
+  const ext = (file.name?.split('.').pop() || 'jpg').toLowerCase()
+  const path = `banners/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`
   const { data, error } = await supabase.storage
-    .from(BUCKET).upload(path, file, { cacheControl: '3600', upsert: false, contentType: file.type })
+    .from(BUCKET).upload(path, file, { cacheControl: '31536000', upsert: false, contentType: file.type })
   if (error) throw new Error(error.message || 'Banner upload failed')
   const { data: urlData } = supabase.storage.from(BUCKET).getPublicUrl(data.path)
   return urlData.publicUrl
@@ -105,11 +109,13 @@ function bakeBanner(img, transform, w, h, name) {
   ctx.imageSmoothingEnabled = true
   ctx.imageSmoothingQuality = 'high'
   ctx.drawImage(img, left, top, dw, dh)
+  const webp = supportsWebp()
+  const type = webp ? 'image/webp' : 'image/jpeg'
   return new Promise((res) => canvas.toBlob((blob) => {
     if (!blob) return res(null)
     const base = (name || 'banner').replace(/\.\w+$/, '')
-    res(new File([blob], `${base}.jpg`, { type: 'image/jpeg' }))
-  }, 'image/jpeg', JPEG_QUALITY))
+    res(new File([blob], `${base}.${webp ? 'webp' : 'jpg'}`, { type }))
+  }, type, JPEG_QUALITY))
 }
 
 async function renderAdjustedBanner(file, transform, w = 1600, h = 700) {

@@ -9,6 +9,7 @@ import {
 import Topbar, { SearchBox, TopIcons, Divider, ProfileChip } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
 import { exportToCsv } from '../lib/csv.js'
+import { compressImage, supportsWebp } from '../lib/compressImage.js'
 
 // Canonical menu categories, in the exact order they should appear. Slugs are
 // kept stable (fry/gravy/tandoor/other) so existing dishes stay categorised;
@@ -189,8 +190,10 @@ function imgFor(name = '', photoUrl) {
 async function uploadPhoto(file) {
   const ext = (file.name.split('.').pop() || 'jpg').toLowerCase()
   const path = `dishes/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`
+  // 1-year immutable cache: filenames are unique per upload, so long caching is
+  // safe and stops the customer app re-downloading the same photo hourly.
   const { data, error } = await supabase.storage
-    .from('menu-photos').upload(path, file, { cacheControl: '3600', upsert: false, contentType: file.type })
+    .from('menu-photos').upload(path, file, { cacheControl: '31536000', upsert: false, contentType: file.type })
   if (error) throw new Error(error.message || 'Photo upload failed')
   const { data: urlData } = supabase.storage.from('menu-photos').getPublicUrl(data.path)
   return urlData.publicUrl
@@ -225,10 +228,13 @@ async function bakeFramedImage(img, transform, size, name) {
   ctx.imageSmoothingEnabled = true
   ctx.imageSmoothingQuality = 'high'
   ctx.drawImage(img, left, top, dw, dh)
-  const blob = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', 0.9))
+  // Prefer WebP (far smaller than JPEG at equal quality); fall back to JPEG.
+  const webp = supportsWebp()
+  const type = webp ? 'image/webp' : 'image/jpeg'
+  const blob = await new Promise((res) => canvas.toBlob(res, type, 0.85))
   if (!blob) return null
   const base = (name || 'dish').replace(/\.\w+$/, '')
-  return new File([blob], `${base}.jpg`, { type: 'image/jpeg' })
+  return new File([blob], `${base}.${webp ? 'webp' : 'jpg'}`, { type })
 }
 
 /* Bake the framed view (contain-fit at scale 1, then the manager's zoom/pan)
@@ -237,7 +243,9 @@ async function bakeFramedImage(img, transform, size, name) {
  * app. If nothing was adjusted, the original file is uploaded untouched. */
 async function renderAdjustedPhoto(file, transform, size = 720) {
   const t = transform || { scale: 1, x: 0, y: 0 }
-  if (t.scale === 1 && t.x === 0 && t.y === 0) return file
+  // No crop/zoom applied: still resize + WebP-compress so a raw multi-MB camera
+  // photo never lands in Storage at full size.
+  if (t.scale === 1 && t.x === 0 && t.y === 0) return compressImage(file)
   const url = URL.createObjectURL(file)
   try {
     const img = await loadImageEl(url)
@@ -598,6 +606,7 @@ export default function Menu() {
       setPhotoUp(true)
       try {
         const baked = await renderAdjustedPhoto(form.photoFile, form.photoTransform)
+        if (baked.size > 2 * 1024 * 1024) throw new Error(`Photo is still ${(baked.size / 1024 / 1024).toFixed(1)} MB after compression — please use a smaller image.`)
         photo_url = await uploadPhoto(baked)
       }
       catch (err) { setPhotoUp(false); setSaving(false); alert(`Could not upload photo: ${err.message}`); return }
@@ -643,6 +652,7 @@ export default function Menu() {
       setPhotoUp(true)
       try {
         const baked = await renderAdjustedPhoto(form.photoFile, form.photoTransform)
+        if (baked.size > 2 * 1024 * 1024) throw new Error(`Photo is still ${(baked.size / 1024 / 1024).toFixed(1)} MB after compression — please use a smaller image.`)
         photo_url = await uploadPhoto(baked)
       }
       catch (err) { setPhotoUp(false); setSaving(false); alert(`Could not upload photo: ${err.message}`); return }
@@ -678,7 +688,7 @@ export default function Menu() {
     if (!photoTarget || !file) return
     setPhotoUpd(true)
     let url
-    try { url = await uploadPhoto(file) }
+    try { url = await uploadPhoto(await compressImage(file)) }
     catch (err) { setPhotoUpd(false); setPhotoTarget(null); alert(`Could not upload photo: ${err.message}`); return }
     const { error } = await supabase.from('products').update({ photo_url: url }).eq('id', photoTarget)
     setPhotoUpd(false)
