@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Plus, X, Upload, ImagePlus, Trash2, Image as ImageIcon,
   Eye, EyeOff, ArrowUp, ArrowDown, AlertTriangle, Download,
-  ZoomIn, ZoomOut, RotateCcw, Move,
+  ZoomIn, ZoomOut, RotateCcw, Move, Pencil,
 } from 'lucide-react'
 import Topbar, { TopIcons } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
@@ -483,8 +483,8 @@ export default function Banners() {
                       {b.is_active ? 'Hide' : 'Show'}
                     </button>
                     <button type="button" onClick={() => openEdit(b)}
-                      className="rounded-md border border-line px-2 py-1.5 text-[11px] font-semibold text-ink-soft hover:border-brand hover:text-brand transition-colors" title="Replace photo">
-                      Replace
+                      className="flex items-center gap-1 rounded-md border border-line px-2 py-1.5 text-[11px] font-semibold text-ink-soft hover:border-brand hover:text-brand transition-colors" title="Edit — adjust framing or change the photo">
+                      <Pencil className="h-3.5 w-3.5" /> Edit
                     </button>
                     <button type="button" onClick={() => remove(b)}
                       className="rounded-md border border-red-200 p-1.5 text-red-400 hover:border-red-400 hover:bg-red-50 hover:text-red-600 transition-colors" title="Delete">
@@ -528,7 +528,7 @@ export default function Banners() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <form onSubmit={save} className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white shadow-xl">
             <div className="flex items-center justify-between border-b border-line p-5">
-              <h3 className="text-base font-bold text-ink">{editTarget ? 'Replace Photo' : 'Add Photo'}</h3>
+              <h3 className="text-base font-bold text-ink">{editTarget ? 'Edit Slide' : 'Add Photo'}</h3>
               <button type="button" onClick={closeForm} className="rounded p-1 text-ink-soft hover:bg-line-soft hover:text-ink transition-colors">
                 <X className="h-4 w-4" />
               </button>
