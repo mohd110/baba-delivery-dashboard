@@ -63,43 +63,51 @@ export default function OrderTimeline({ order }) {
           <span className="text-[11px] font-semibold text-pos-dark">Delivered in {delivered}</span>
         ) : null}
       </div>
-      <ol className="rounded-lg border border-line p-3">
-        {steps.map((s, i) => {
-          const isLast = i === steps.length - 1
-          const nextDone = !isLast && steps[i + 1].done
-          const time = fmtStepTime(s.at)
-          return (
-            <li key={i} className="flex gap-3">
-              <div className="flex flex-col items-center self-stretch">
-                <span
-                  className={`z-10 flex h-6 w-6 shrink-0 items-center justify-center rounded-full ${
-                    s.cancelled
-                      ? 'bg-red-500 text-white'
-                      : s.done
-                        ? 'bg-pos text-white'
-                        : 'border-2 border-line-2 bg-white'
-                  }`}
-                >
-                  {s.cancelled ? (
-                    <X className="h-3.5 w-3.5" />
-                  ) : s.done ? (
-                    <Check className="h-3.5 w-3.5" />
-                  ) : (
-                    <span className="h-1.5 w-1.5 rounded-full bg-line-2" />
-                  )}
-                </span>
-                {!isLast && <span className={`w-0.5 flex-1 ${nextDone ? 'bg-pos' : 'bg-line-2'}`} />}
-              </div>
-              <div className={`-mt-0.5 ${isLast ? 'pb-0' : 'pb-4'}`}>
-                <p className={`text-xs font-semibold ${s.done ? 'text-ink' : 'text-ink-soft'}`}>{s.label}</p>
+      {/* Horizontal stepper — scrolls sideways when the container is narrow. */}
+      <div className="overflow-x-auto rounded-lg border border-line px-2 py-4">
+        <ol className="flex min-w-max">
+          {steps.map((s, i) => {
+            const isFirst = i === 0
+            const isLast = i === steps.length - 1
+            const time = fmtStepTime(s.at)
+            // The segment feeding into a node is "done" (green) when that node
+            // is reached; the segment leaving it is green when the next is.
+            const leftOn = s.done
+            const rightOn = !isLast && steps[i + 1].done
+            return (
+              <li key={i} className="flex w-[104px] shrink-0 flex-col items-center">
+                <div className="flex w-full items-center">
+                  <span className={`h-0.5 flex-1 ${isFirst ? 'invisible' : leftOn ? 'bg-pos' : 'bg-line-2'}`} />
+                  <span
+                    className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${
+                      s.cancelled
+                        ? 'bg-red-500 text-white'
+                        : s.done
+                          ? 'bg-pos text-white'
+                          : 'border-2 border-line-2 bg-white'
+                    }`}
+                  >
+                    {s.cancelled ? (
+                      <X className="h-4 w-4" />
+                    ) : s.done ? (
+                      <Check className="h-4 w-4" />
+                    ) : (
+                      <span className="h-1.5 w-1.5 rounded-full bg-line-2" />
+                    )}
+                  </span>
+                  <span className={`h-0.5 flex-1 ${isLast ? 'invisible' : rightOn ? 'bg-pos' : 'bg-line-2'}`} />
+                </div>
+                <p className={`mt-1.5 px-1 text-center text-[11px] font-semibold leading-tight ${s.done ? 'text-ink' : 'text-ink-soft'}`}>
+                  {s.label}
+                </p>
                 {(time || !s.done) && (
-                  <p className="text-[11px] text-ink-soft">{time || 'Pending'}</p>
+                  <p className="mt-0.5 text-center text-[10px] text-ink-soft">{time || 'Pending'}</p>
                 )}
-              </div>
-            </li>
-          )
-        })}
-      </ol>
+              </li>
+            )
+          })}
+        </ol>
+      </div>
     </div>
   )
 }
