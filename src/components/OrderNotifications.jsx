@@ -7,73 +7,42 @@ import { boldLast4 } from './OrderIdLabel.jsx'
 
 let toastSeq = 0
 
-/* ── Loud, irritating new-order alarm (rings for 1 minute) ─────────────
- * Two-tone siren: alternates between a 660 Hz and an 880 Hz harsh square
- * wave (ambulance / fire-truck style), swapping every 0.4s at near-max
- * volume so staff can't miss an incoming order.
- * Best-effort: silently skipped if the browser blocks audio. Call
- * stopAlarm() to silence it early. */
+/* ── New-order alarm ────────────────────────────────────────────────────
+ * Plays a custom audio clip on loop so staff can't miss an incoming order,
+ * auto-stopping after 1 minute. Best-effort: silently skipped if the browser
+ * blocks autoplay (no user interaction yet). Call stopAlarm() to silence it. */
 const ALARM_DURATION_MS = 60_000
-let alarmCtx = null
-let alarmInterval = null
+const ALARM_SRC = '/assets/new-order.mp3'
+let alarmAudio = null
 let alarmTimeout = null
 
 function stopAlarm() {
-  if (alarmInterval) {
-    clearInterval(alarmInterval)
-    alarmInterval = null
-  }
   if (alarmTimeout) {
     clearTimeout(alarmTimeout)
     alarmTimeout = null
   }
-  if (alarmCtx) {
+  if (alarmAudio) {
     try {
-      alarmCtx.close()
+      alarmAudio.pause()
+      alarmAudio.currentTime = 0
     } catch {
-      /* already closed */
+      /* already stopped */
     }
-    alarmCtx = null
+    alarmAudio = null
   }
 }
 
 function startAlarm() {
   try {
-    const Ctx = window.AudioContext || window.webkitAudioContext
-    if (!Ctx) return
     stopAlarm() // restart cleanly if another order arrives mid-alarm
-    const ctx = new Ctx()
-    alarmCtx = ctx
-    ctx.resume?.()
-
-    const tone = (freq, t0, dur) => {
-      const osc = ctx.createOscillator()
-      const gain = ctx.createGain()
-      osc.connect(gain)
-      gain.connect(ctx.destination)
-      osc.type = 'square' // harsh, buzzy, piercing
-      osc.frequency.value = freq
-      gain.gain.setValueAtTime(0.0001, t0)
-      gain.gain.exponentialRampToValueAtTime(0.85, t0 + 0.008) // very loud
-      gain.gain.setValueAtTime(0.85, t0 + dur - 0.02)
-      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur)
-      osc.start(t0)
-      osc.stop(t0 + dur)
+    const audio = new Audio(ALARM_SRC)
+    audio.loop = true
+    audio.volume = 1
+    alarmAudio = audio
+    const played = audio.play()
+    if (played && typeof played.catch === 'function') {
+      played.catch(() => { /* autoplay blocked until the page is interacted with */ })
     }
-
-    // One "ring" = a two-tone siren cycle: 660 Hz then 880 Hz, each held for
-    // 0.4s back-to-back with no gap (ambulance / fire-truck wail). The cycle
-    // repeats continuously so it nags until silenced.
-    const STEP = 0.4
-    const ring = () => {
-      if (!alarmCtx) return
-      const now = ctx.currentTime
-      tone(660, now, STEP)
-      tone(880, now + STEP, STEP)
-    }
-
-    ring()
-    alarmInterval = setInterval(ring, STEP * 2 * 1000) // seamless 0.8s loop
     alarmTimeout = setTimeout(stopAlarm, ALARM_DURATION_MS)
   } catch {
     /* audio not available — silently skip */
