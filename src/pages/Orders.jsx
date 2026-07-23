@@ -87,6 +87,32 @@ function fmtLateBy(ms) {
   return s > 0 ? `${m} min ${s} sec` : `${m} min`
 }
 
+// Late anchors survive a page reload via localStorage, independent of any DB
+// column (the DB `late_since` write is a best-effort bonus for cross-device /
+// the customer app). Shape: { [orderId]: originalReadyByMs }.
+const LATE_STORE_KEY = 'wbf.lateSince'
+function loadLateAnchors() {
+  try {
+    const raw = localStorage.getItem(LATE_STORE_KEY)
+    const obj = raw ? JSON.parse(raw) : null
+    if (!obj || typeof obj !== 'object') return new Map()
+    return new Map(
+      Object.entries(obj)
+        .map(([id, ts]) => [id, Number(ts)])
+        .filter(([, ts]) => Number.isFinite(ts))
+    )
+  } catch {
+    return new Map()
+  }
+}
+function saveLateAnchors(map) {
+  try {
+    localStorage.setItem(LATE_STORE_KEY, JSON.stringify(Object.fromEntries(map)))
+  } catch {
+    /* storage unavailable — the in-memory map still works for this session */
+  }
+}
+
 // Minutes added to eta_minutes when the manager snoozes an expired prep timer.
 const SNOOZE_MIN = 5
 // How long the card blinks and the buzzer sounds after a timer runs out.
@@ -685,7 +711,7 @@ export default function Orders() {
   // overdue. Kept even when the manager adds prep time, so a snoozed order stays
   // counted as late (timed from its original due time). Cleared when the order
   // leaves 'preparing'. Maintained in an effect — never mutated during render.
-  const [lateSince, setLateSince] = useState(() => new Map())
+  const [lateSince, setLateSince] = useState(loadLateAnchors)
 
   // Restaurant open/closed state (shared with Outlets + Settings).
   const {
@@ -843,6 +869,10 @@ export default function Orders() {
   // A persisted `late_since` (see the effect below) is preferred so the anchor
   // survives page reloads and snoozes — falling back to the live ready-by time.
   useEffect(() => {
+    // Wait until orders have loaded, otherwise the empty first render would
+    // prune the anchors we just re-hydrated from localStorage before we can
+    // match them to their (still-preparing) orders.
+    if (loading) return
     setLateSince((prev) => {
       let next = prev
       const ensure = () => { if (next === prev) next = new Map(prev) }
@@ -855,12 +885,19 @@ export default function Orders() {
         const rb = readyByTs(o)
         if (rb != null && nowTs >= rb) { ensure(); next.set(o.id, rb) }
       })
+      // Forget anchors for orders that have left 'preparing' (marked ready /
+      // cancelled) — only orders present in the loaded list, so a not-yet-seen
+      // order isn't pruned.
+      const knownIds = new Set(orders.map((o) => o.id))
       for (const id of prev.keys()) {
-        if (!liveIds.has(id)) { ensure(); next.delete(id) }
+        if (knownIds.has(id) && !liveIds.has(id)) { ensure(); next.delete(id) }
       }
       return next
     })
-  }, [nowTs, activeOrders])
+  }, [nowTs, activeOrders, orders, loading])
+
+  // Persist the anchor map so lateness survives a page reload on this device.
+  useEffect(() => { saveLateAnchors(lateSince) }, [lateSince])
 
   // Persist the late anchor to the DB the first time an order goes late, so a
   // page reload (or snooze) keeps it flagged late timed from its original due
@@ -1530,18 +1567,12 @@ export default function Orders() {
                       <div className="flex shrink-0 items-center gap-2">
                         {isPreparing ? (
                           <div className="flex flex-col items-end gap-1">
-                            {remainingMs != null && (
-                              <span
-                                className={`flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-bold tabular-nums ${
-                                  isExpired
-                                    ? isAlarming
-                                      ? 'animate-alarm'
-                                      : 'bg-brand-light text-brand'
-                                    : 'border border-line bg-canvas text-ink'
-                                }`}
-                              >
+                            {/* Prep countdown before it's due; once overdue, the
+                                blinking "Order Late · by X" label takes over. */}
+                            {remainingMs != null && !isExpired && (
+                              <span className="flex items-center gap-1 rounded-md border border-line bg-canvas px-2 py-0.5 text-[10px] font-bold tabular-nums text-ink">
                                 <Clock className="h-2.5 w-2.5" />
-                                {isExpired ? `Overdue ${fmtCountdown(-lateByMs)}` : fmtCountdown(remainingMs)}
+                                {fmtCountdown(remainingMs)}
                               </span>
                             )}
                             <button
