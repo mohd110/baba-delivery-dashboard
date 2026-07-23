@@ -58,7 +58,7 @@ export function Divider() {
 }
 
 export function ProfileChip({ name = 'Wali Baba Foods', sub = 'Delivery Admin', img, initials, initialsBg = 'bg-brand' }) {
-  const logoSrc = img || '/assets/walibaba logo.jpeg'
+  const logoSrc = img || '/assets/wali-baba-logo.png'
   return (
     <div className="flex items-center gap-3">
       <img
@@ -66,11 +66,11 @@ export function ProfileChip({ name = 'Wali Baba Foods', sub = 'Delivery Admin', 
         onError={(e) => {
           if (!e.currentTarget.dataset.triedFallback) {
             e.currentTarget.dataset.triedFallback = 'true'
-            e.currentTarget.src = '/assets/logo.png'
+            e.currentTarget.src = '/assets/walibaba logo.jpeg'
           }
         }}
         alt={name}
-        className="h-10 w-9 shrink-0 object-contain"
+        className="h-12 w-11 shrink-0 object-contain"
       />
       <div className="flex flex-col leading-tight">
         <span className="text-sm font-semibold text-ink">{name}</span>

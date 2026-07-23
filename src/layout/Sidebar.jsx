@@ -86,15 +86,15 @@ export default function Sidebar() {
       {/* Logo */}
       <div className="flex items-center gap-3 px-6 pb-6">
         <img
-          src="/assets/walibaba logo.jpeg"
+          src="/assets/wali-baba-logo.png"
           onError={(e) => {
             if (!e.currentTarget.dataset.triedFallback) {
               e.currentTarget.dataset.triedFallback = 'true'
-              e.currentTarget.src = '/assets/logo.png'
+              e.currentTarget.src = '/assets/walibaba logo.jpeg'
             }
           }}
           alt="Wali Baba Foods"
-          className="h-16 w-16 shrink-0 object-contain"
+          className="h-20 w-20 shrink-0 object-contain"
         />
         <div className="flex flex-col overflow-hidden">
           <p className="text-[20px] font-bold leading-[24px] tracking-tight text-brand [word-break:break-word]">

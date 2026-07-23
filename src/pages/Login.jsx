@@ -30,15 +30,15 @@ export default function Login() {
         {/* brand */}
         <div className="mb-8 flex flex-col items-center text-center">
           <img
-            src="/assets/walibaba logo.jpeg"
+            src="/assets/wali-baba-logo.png"
             onError={(e) => {
               if (!e.currentTarget.dataset.triedFallback) {
                 e.currentTarget.dataset.triedFallback = 'true'
-                e.currentTarget.src = '/assets/logo.png'
+                e.currentTarget.src = '/assets/walibaba logo.jpeg'
               }
             }}
             alt="Wali Baba Foods"
-            className="mb-4 h-24 w-auto object-contain"
+            className="mb-4 h-36 w-auto object-contain"
           />
           <h1 className="text-2xl font-bold leading-tight tracking-tight text-brand">Wali Baba Foods</h1>
           <p className="mt-1 text-xs font-semibold uppercase tracking-[1.2px] text-ink-soft">
