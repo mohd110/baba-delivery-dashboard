@@ -387,11 +387,12 @@ export default function Banners() {
     const a = target.sort_order ?? index
     const b = swap.sort_order ?? index + dir
     setBusyId(target.id)
-    const { error } = await supabase.from('banners').upsert([
-      { id: target.id, sort_order: b },
-      { id: swap.id, sort_order: a },
+    const [{ error: e1 }, { error: e2 }] = await Promise.all([
+      supabase.from('banners').update({ sort_order: b }).eq('id', target.id),
+      supabase.from('banners').update({ sort_order: a }).eq('id', swap.id),
     ])
     setBusyId(null)
+    const error = e1 || e2
     if (error) alert(`Could not reorder: ${error.message}`)
     load()
   }
