@@ -28,6 +28,7 @@ import Topbar, { TopIcons } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
 import { orderCode } from '../lib/format.js'
 import { OrderIdLabel } from '../components/OrderIdLabel.jsx'
+import OrderTimeline from '../components/OrderTimeline.jsx'
 import { useRestaurant, isAutoScheduleOn, setAutoScheduleOn } from '../lib/restaurant.js'
 
 function imgFor(name = '', photoUrl) {
@@ -715,7 +716,7 @@ export default function Orders() {
 
   // Restaurant open/closed state (shared with Outlets + Settings).
   const {
-    isOpen: storeOpen, loading: storeLoading, setOpen: setStoreOpen,
+    loading: storeLoading, setOpen: setStoreOpen,
     closedReason, effectiveOpen, openTime: storeOpenTime,
   } = useRestaurant()
   const [storeBusy, setStoreBusy] = useState(false)
@@ -1510,14 +1511,6 @@ export default function Orders() {
                       </div>
                     </div>
 
-                    {/* Late alert: persists and keeps counting up for as long as
-                        the prep timer stays overdue (doesn't vanish with the popup). */}
-                    {isExpired && (
-                      <div className="animate-alarm flex items-center gap-1.5 self-start rounded-md px-2 py-1 text-[11px] font-extrabold uppercase tracking-wide">
-                        <AlertTriangle className="h-3.5 w-3.5" /> Order Late · by {fmtLateBy(lateByMs)}
-                      </div>
-                    )}
-
                     {/* Contact number */}
                     <div className="flex items-baseline gap-2 text-xs">
                       <span className="w-11 shrink-0 text-[9px] font-bold uppercase tracking-wide text-ink-soft">
@@ -1565,26 +1558,16 @@ export default function Orders() {
                         )}
                       </div>
                       <div className="flex shrink-0 items-center gap-2">
-                        {isPreparing ? (
-                          <div className="flex flex-col items-end gap-1">
-                            {/* Prep countdown before it's due; once overdue, the
-                                blinking "Order Late · by X" label takes over. */}
-                            {remainingMs != null && !isExpired && (
-                              <span className="flex items-center gap-1 rounded-md border border-line bg-canvas px-2 py-0.5 text-[10px] font-bold tabular-nums text-ink">
-                                <Clock className="h-2.5 w-2.5" />
-                                {fmtCountdown(remainingMs)}
-                              </span>
-                            )}
-                            <button
-                              type="button"
-                              disabled={busy === o.id}
-                              onClick={(e) => { e.stopPropagation(); advance(o) }}
-                              className="flex items-center gap-1 rounded-lg bg-pos px-2.5 py-1 text-[10px] font-bold text-white shadow-sm hover:bg-pos-dark transition-colors disabled:opacity-50"
-                            >
-                              <CheckCircle2 className="h-3 w-3" /> Mark Ready
-                            </button>
-                          </div>
-                        ) : null}
+                        {/* Prep countdown before the order is due. Once overdue
+                            it drops off the card — the red clock above flags the
+                            lateness, and Mark Ready / "Order Late" now live in the
+                            detail panel below the checklist. */}
+                        {isPreparing && remainingMs != null && !isExpired && (
+                          <span className="flex items-center gap-1 rounded-md border border-line bg-canvas px-2 py-0.5 text-[10px] font-bold tabular-nums text-ink">
+                            <Clock className="h-2.5 w-2.5" />
+                            {fmtCountdown(remainingMs)}
+                          </span>
+                        )}
                         {isPending && cancelRemainingMs != null && cancelRemainingMs > 0 && (
                           <span
                             className={`flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-bold tabular-nums ${
@@ -1787,6 +1770,38 @@ export default function Orders() {
                       })}
                     </div>
                   </div>
+
+                  {/* Single Mark Ready / Order Late action — below the checklist.
+                      When the order is overdue it blinks "Order Late" but still
+                      marks the order ready on click. */}
+                  {selectedOrder.status === 'preparing' && (() => {
+                    const anchor = lateSince.get(selectedOrder.id) ?? null
+                    const late = anchor != null
+                    const lateBy = late ? nowTs - anchor : 0
+                    return (
+                      <button
+                        type="button"
+                        disabled={busy === selectedOrder.id}
+                        onClick={() => advance(selectedOrder)}
+                        className={`flex w-full items-center justify-center gap-2 rounded-xl px-4 py-3.5 text-sm font-bold uppercase tracking-wide shadow-sm transition-colors disabled:opacity-50 ${
+                          late ? 'animate-alarm' : 'bg-pos text-white hover:bg-pos-dark'
+                        }`}
+                      >
+                        {late ? (
+                          <>
+                            <AlertTriangle className="h-4 w-4" /> Order Late · by {fmtLateBy(lateBy)} — Mark Ready
+                          </>
+                        ) : (
+                          <>
+                            <CheckCircle2 className="h-4 w-4" /> Mark Ready
+                          </>
+                        )}
+                      </button>
+                    )
+                  })()}
+
+                  {/* Zomato-style order timeline */}
+                  <OrderTimeline order={selectedOrder} />
                 </div>
 
                 {/* Right col: Rider Details & Pricing */}
@@ -1944,8 +1959,8 @@ export default function Orders() {
                       )
                     })()
                   ) : selectedOrder.status === 'preparing' ? (
-                    // Mark Ready is handled by the inline button on the order card.
-                    // Nothing extra needed in the footer for preparing orders.
+                    // Mark Ready (and the "Order Late" state) live in the single
+                    // button below the checklist, so the footer only shows Cancel.
                     null
                   ) : NEXT_ACTION[selectedOrder.status] ? (
                     <button
