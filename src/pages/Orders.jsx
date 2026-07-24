@@ -114,6 +114,32 @@ function saveLateAnchors(map) {
   }
 }
 
+// Snoozes of the "Time's up!" popup survive a reload too, so dismissing it (or
+// adding prep time) doesn't re-open on the next refresh. Shape: { [orderId]:
+// untilMs } — the popup stays closed for that order until nowTs passes untilMs.
+const ALARM_SNOOZE_KEY = 'wbf.alarmSnooze'
+function loadAlarmSnoozes() {
+  try {
+    const raw = localStorage.getItem(ALARM_SNOOZE_KEY)
+    const obj = raw ? JSON.parse(raw) : null
+    if (!obj || typeof obj !== 'object') return new Map()
+    return new Map(
+      Object.entries(obj)
+        .map(([id, ts]) => [id, Number(ts)])
+        .filter(([, ts]) => Number.isFinite(ts))
+    )
+  } catch {
+    return new Map()
+  }
+}
+function saveAlarmSnoozes(map) {
+  try {
+    localStorage.setItem(ALARM_SNOOZE_KEY, JSON.stringify(Object.fromEntries(map)))
+  } catch {
+    /* storage unavailable — the in-memory map still works for this session */
+  }
+}
+
 // Minutes added to eta_minutes when the manager snoozes an expired prep timer.
 const SNOOZE_MIN = 5
 // How long the card blinks and the buzzer sounds after a timer runs out.
@@ -703,11 +729,13 @@ export default function Orders() {
       if (next) { stopBuzzer(); stopSpeaking() }
       return next
     })
-  // Order-ids whose "Time's up!" popup the manager has dismissed. Dismissing
-  // only closes the blocking modal — the card keeps its blinking "Order Late"
-  // label and the voice keeps announcing. Ids are pruned once the order is no
-  // longer late so a fresh lateness re-opens the popup.
-  const [dismissedAlarms, setDismissedAlarms] = useState(() => new Set())
+  // Order-id -> timestamp until which the "Time's up!" popup stays snoozed.
+  // Dismissing (X) or adding prep time snoozes it for SNOOZE_MIN minutes rather
+  // than forever, so it survives a refresh yet re-opens once that time is up —
+  // the card keeps its blinking "Order Late" label and the voice keeps
+  // announcing throughout. Persisted so a reload doesn't re-open the popup.
+  // Ids are pruned once the order is no longer late.
+  const [alarmSnoozes, setAlarmSnoozes] = useState(loadAlarmSnoozes)
   // id -> original ready-by timestamp, captured the first moment an order goes
   // overdue. Kept even when the manager adds prep time, so a snoozed order stays
   // counted as late (timed from its original due time). Cleared when the order
@@ -858,9 +886,9 @@ export default function Orders() {
     .sort((a, b) => lateAnchorOf(a) - lateAnchorOf(b))
   const lateCount = lateOrders.length
   const lateIdsKey = lateOrders.map((o) => o.id).join(',')
-  // The order shown in the mark-ready popup (the most overdue one the manager
-  // hasn't dismissed). Dismissing/snoozing never clears the persistent label.
-  const alarmOrder = lateOrders.find((o) => !dismissedAlarms.has(o.id)) || null
+  // The order shown in the mark-ready popup (the most overdue one whose snooze
+  // has lapsed). Dismissing/snoozing never clears the persistent label.
+  const alarmOrder = lateOrders.find((o) => (alarmSnoozes.get(o.id) ?? 0) <= nowTs) || null
   // Loud buzzer only for the first minute after an order first goes late.
   const alarmActive = alarmOrder != null && nowTs - lateAnchorOf(alarmOrder) < ALARM_MS
 
@@ -899,6 +927,8 @@ export default function Orders() {
 
   // Persist the anchor map so lateness survives a page reload on this device.
   useEffect(() => { saveLateAnchors(lateSince) }, [lateSince])
+  // Persist popup snoozes too, so a refresh doesn't re-open a just-dismissed one.
+  useEffect(() => { saveAlarmSnoozes(alarmSnoozes) }, [alarmSnoozes])
 
   // Persist the late anchor to the DB the first time an order goes late, so a
   // page reload (or snooze) keeps it flagged late timed from its original due
@@ -959,14 +989,14 @@ export default function Orders() {
       notifyLateDesktop(o)
     })
     if (freshlyLate.length > 0 && !soundMuted) speakLate(lateCount)
-    // Prune dismissed ids that are no longer late, so if the same order goes
-    // late again later its popup re-opens.
-    setDismissedAlarms((prev) => {
+    // Prune snoozes for ids that are no longer late, so if the same order goes
+    // late again later its popup re-opens immediately.
+    setAlarmSnoozes((prev) => {
       if (prev.size === 0) return prev
       let changed = false
-      const next = new Set()
-      for (const id of prev) {
-        if (liveLate.has(id)) next.add(id)
+      const next = new Map()
+      for (const [id, until] of prev) {
+        if (liveLate.has(id)) next.set(id, until)
         else changed = true
       }
       return changed ? next : prev
@@ -1132,7 +1162,9 @@ export default function Orders() {
   // time only closes the popup, it doesn't reset the late clock.
   const addPrepTime = async (order) => {
     if (!order) return
-    setDismissedAlarms((s) => new Set(s).add(order.id))
+    // Snooze the popup for the added minutes, then let it re-open so the
+    // manager is prompted again if the order is still not ready.
+    setAlarmSnoozes((s) => new Map(s).set(order.id, Date.now() + SNOOZE_MIN * 60000))
     const prev = order.eta_minutes || 0
     const next = prev + SNOOZE_MIN
     patchLocal(order.id, { eta_minutes: next })
@@ -1778,6 +1810,10 @@ export default function Orders() {
                     const anchor = lateSince.get(selectedOrder.id) ?? null
                     const late = anchor != null
                     const lateBy = late ? nowTs - anchor : 0
+                    // Zomato-style live countdown on the button while the prep
+                    // timer is still running (e.g. "Mark Ready · 4:53").
+                    const readyTs = readyByTs(selectedOrder)
+                    const remainingMs = readyTs != null ? readyTs - nowTs : null
                     return (
                       <button
                         type="button"
@@ -1794,6 +1830,9 @@ export default function Orders() {
                         ) : (
                           <>
                             <CheckCircle2 className="h-4 w-4" /> Mark Ready
+                            {remainingMs != null && (
+                              <span className="tabular-nums font-mono">· {fmtCountdown(remainingMs)}</span>
+                            )}
                           </>
                         )}
                       </button>
@@ -2021,8 +2060,12 @@ export default function Orders() {
               </div>
               <button
                 type="button"
-                onClick={() => setDismissedAlarms((s) => new Set(s).add(alarmOrder.id))}
-                title="Dismiss — the order stays flagged as late on its card"
+                onClick={() =>
+                  setAlarmSnoozes((s) =>
+                    new Map(s).set(alarmOrder.id, Date.now() + SNOOZE_MIN * 60000)
+                  )
+                }
+                title={`Dismiss — the order stays flagged as late; the popup returns in ${SNOOZE_MIN} min`}
                 className="shrink-0 rounded-lg p-1.5 text-brand hover:bg-white/60 transition-colors"
               >
                 <X className="h-5 w-5" />

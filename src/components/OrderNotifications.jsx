@@ -55,7 +55,16 @@ export default function OrderNotifications() {
   const navigate = useNavigate()
 
   useEffect(() => {
-    const dismiss = (id) => setToasts((list) => list.filter((t) => t.id !== id))
+    // Drop every toast for an order that is no longer awaiting acceptance,
+    // silencing the alarm once the last one clears.
+    const dismissByOrderId = (orderId) => {
+      if (!orderId) return
+      setToasts((list) => {
+        const next = list.filter((t) => t.orderId !== orderId)
+        if (next.length !== list.length && next.length === 0) stopAlarm()
+        return next
+      })
+    }
 
     const channel = supabase
       .channel('new-orders')
@@ -64,6 +73,8 @@ export default function OrderNotifications() {
         { event: 'INSERT', schema: 'public', table: 'orders' },
         (payload) => {
           const o = payload.new || {}
+          // Only alert for orders still awaiting acceptance.
+          if (o.status && o.status !== 'pending') return
           const addr = o.delivery_address || {}
           const id = ++toastSeq
           const toast = {
@@ -75,8 +86,19 @@ export default function OrderNotifications() {
           }
           setToasts((list) => [toast, ...list].slice(0, 4))
           startAlarm()
-          // Keep the toast visible for the full alarm so staff can silence it.
-          setTimeout(() => dismiss(id), ALARM_DURATION_MS)
+          // The toast now stays until the order is accepted (handled by the
+          // UPDATE listener below) or the manager dismisses it; only the
+          // looping alarm auto-stops after ALARM_DURATION_MS.
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'orders' },
+        (payload) => {
+          const o = payload.new || {}
+          // Once an order leaves 'pending' (accepted, cancelled, etc.) clear
+          // its notification automatically.
+          if (o.status && o.status !== 'pending') dismissByOrderId(o.id)
         }
       )
       .subscribe()
