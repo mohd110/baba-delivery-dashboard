@@ -147,42 +147,36 @@ const ALARM_MS = 60000
 // Pending orders not accepted within this window are auto-cancelled.
 const AUTO_CANCEL_MINUTES = 10
 
-// --- Prep-timer buzzer (Web Audio, no asset) -------------------------------
-// A short repeating square-wave beep that runs while any prep timer is expired.
-let _audioCtx = null
-let _buzzTimer = null
+// --- Late-order buzzer (custom audio clip) ---------------------------------
+// Loops a custom "order running late" clip while a prep timer is expired.
+// Best-effort: silently skipped if the browser blocks autoplay (no user
+// interaction yet).
+const LATE_ALARM_SRC = '/assets/late-order.mp3'
+let _buzzAudio = null
 function startBuzzer() {
-  if (_buzzTimer) return
-  const beep = () => {
-    try {
-      if (!_audioCtx) {
-        const Ctx = window.AudioContext || window.webkitAudioContext
-        if (!Ctx) return
-        _audioCtx = new Ctx()
-      }
-      const ctx = _audioCtx
-      if (ctx.state === 'suspended') ctx.resume()
-      const osc = ctx.createOscillator()
-      const gain = ctx.createGain()
-      osc.type = 'square'
-      osc.frequency.value = 880
-      gain.gain.setValueAtTime(0.0001, ctx.currentTime)
-      gain.gain.exponentialRampToValueAtTime(0.28, ctx.currentTime + 0.02)
-      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.32)
-      osc.connect(gain).connect(ctx.destination)
-      osc.start()
-      osc.stop(ctx.currentTime + 0.34)
-    } catch {
-      /* audio unavailable — silently ignore */
+  if (_buzzAudio) return
+  try {
+    const audio = new Audio(LATE_ALARM_SRC)
+    audio.loop = true
+    audio.volume = 1
+    _buzzAudio = audio
+    const played = audio.play()
+    if (played && typeof played.catch === 'function') {
+      played.catch(() => { /* autoplay blocked until the page is interacted with */ })
     }
+  } catch {
+    /* audio unavailable — silently ignore */
   }
-  beep()
-  _buzzTimer = setInterval(beep, 800)
 }
 function stopBuzzer() {
-  if (_buzzTimer) {
-    clearInterval(_buzzTimer)
-    _buzzTimer = null
+  if (_buzzAudio) {
+    try {
+      _buzzAudio.pause()
+      _buzzAudio.currentTime = 0
+    } catch {
+      /* already stopped */
+    }
+    _buzzAudio = null
   }
 }
 
@@ -1842,7 +1836,7 @@ export default function Orders() {
                           <>
                             <CheckCircle2 className="h-4 w-4" /> Mark Ready
                             {remainingMs != null && (
-                              <span className="tabular-nums font-mono font-extrabold">· {fmtCountdown(remainingMs)}</span>
+                              <span className="tabular-nums font-mono font-black text-base tracking-tight">· {fmtCountdown(remainingMs)}</span>
                             )}
                           </>
                         )}
@@ -2203,9 +2197,9 @@ export default function Orders() {
       )}
 
       {cancelTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-md rounded-2xl bg-white shadow-xl">
-            <div className="flex items-start justify-between border-b border-line p-5">
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/40 p-4">
+          <div className="flex max-h-[90vh] w-full max-w-md flex-col rounded-2xl bg-white shadow-xl">
+            <div className="flex shrink-0 items-start justify-between border-b border-line p-5">
               <div className="flex items-center gap-2">
                 <span className="rounded-lg bg-red-50 p-2 text-red-600">
                   <Ban className="h-5 w-5" />
@@ -2228,7 +2222,7 @@ export default function Orders() {
               </button>
             </div>
 
-            <div className="max-h-[55vh] overflow-y-auto p-5">
+            <div className="min-h-0 flex-1 overflow-y-auto p-5">
               <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-ink-soft">
                 Reason
               </p>
@@ -2271,7 +2265,7 @@ export default function Orders() {
               />
             </div>
 
-            <div className="flex items-center justify-end gap-3 border-t border-line p-5">
+            <div className="flex shrink-0 items-center justify-end gap-3 border-t border-line p-5">
               <button
                 type="button"
                 onClick={() => setCancelTarget(null)}
