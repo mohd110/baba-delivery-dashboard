@@ -989,20 +989,31 @@ export default function Orders() {
       notifyLateDesktop(o)
     })
     if (freshlyLate.length > 0 && !soundMuted) speakLate(lateCount)
-    // Prune snoozes for ids that are no longer late, so if the same order goes
-    // late again later its popup re-opens immediately.
+    // Prune snoozes only for orders we've actually loaded that are no longer
+    // late, so the same order going late again re-opens its popup. Crucially,
+    // an id we haven't loaded yet (e.g. right after a refresh, before orders
+    // re-hydrate) is KEPT — otherwise the just-restored snooze would be wiped
+    // and the popup would re-open on every refresh.
+    if (loading) return
+    const knownIds = new Set(orders.map((o) => o.id))
+    const prepIds = new Set(
+      activeOrders.filter((o) => o.status === 'preparing').map((o) => o.id)
+    )
     setAlarmSnoozes((prev) => {
       if (prev.size === 0) return prev
       let changed = false
       const next = new Map()
       for (const [id, until] of prev) {
-        if (liveLate.has(id)) next.set(id, until)
+        // Keep the snooze while the order hasn't loaded yet, or is still
+        // preparing (its late anchor may just not be recomputed yet). Only
+        // prune once a known order has left 'preparing'.
+        if (!knownIds.has(id) || prepIds.has(id)) next.set(id, until)
         else changed = true
       }
       return changed ? next : prev
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lateIdsKey])
+  }, [lateIdsKey, loading])
 
   // While anything stays late, keep nagging by voice every 5s (like Zomato)
   // until it's marked ready or the alert is muted (snoozing keeps it late).
