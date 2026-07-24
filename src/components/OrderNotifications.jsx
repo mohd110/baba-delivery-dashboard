@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { BellRing, X } from 'lucide-react'
+import { BellRing } from 'lucide-react'
 import { supabase } from '../lib/supabase.js'
 import { orderCode } from '../lib/format.js'
 import { boldLast4 } from './OrderIdLabel.jsx'
@@ -8,19 +8,14 @@ import { boldLast4 } from './OrderIdLabel.jsx'
 let toastSeq = 0
 
 /* ── New-order alarm ────────────────────────────────────────────────────
- * Plays a custom audio clip on loop so staff can't miss an incoming order,
- * auto-stopping after 1 minute. Best-effort: silently skipped if the browser
- * blocks autoplay (no user interaction yet). Call stopAlarm() to silence it. */
-const ALARM_DURATION_MS = 60_000
+ * Plays a custom audio clip on loop so staff can't miss an incoming order.
+ * It keeps looping until the order is accepted — nothing dismisses it early
+ * (not clicking, not a close button). Best-effort: silently skipped if the
+ * browser blocks autoplay (no user interaction yet). */
 const ALARM_SRC = '/assets/new-order.mp3'
 let alarmAudio = null
-let alarmTimeout = null
 
 function stopAlarm() {
-  if (alarmTimeout) {
-    clearTimeout(alarmTimeout)
-    alarmTimeout = null
-  }
   if (alarmAudio) {
     try {
       alarmAudio.pause()
@@ -43,7 +38,6 @@ function startAlarm() {
     if (played && typeof played.catch === 'function') {
       played.catch(() => { /* autoplay blocked until the page is interacted with */ })
     }
-    alarmTimeout = setTimeout(stopAlarm, ALARM_DURATION_MS)
   } catch {
     /* audio not available — silently skip */
   }
@@ -86,9 +80,8 @@ export default function OrderNotifications() {
           }
           setToasts((list) => [toast, ...list].slice(0, 4))
           startAlarm()
-          // The toast now stays until the order is accepted (handled by the
-          // UPDATE listener below) or the manager dismisses it; only the
-          // looping alarm auto-stops after ALARM_DURATION_MS.
+          // The toast and the alarm both stay until the order is accepted —
+          // handled by the UPDATE listener below. Nothing here dismisses them.
         }
       )
       .on(
@@ -97,7 +90,7 @@ export default function OrderNotifications() {
         (payload) => {
           const o = payload.new || {}
           // Once an order leaves 'pending' (accepted, cancelled, etc.) clear
-          // its notification automatically.
+          // its notification and stop the alarm automatically.
           if (o.status && o.status !== 'pending') dismissByOrderId(o.id)
         }
       )
@@ -111,18 +104,10 @@ export default function OrderNotifications() {
 
   if (toasts.length === 0) return null
 
-  // Clicking anywhere on a toast silences the alarm and jumps straight to
-  // that order in the Active Orders screen.
+  // Clicking a toast jumps to that order so staff can accept it. It does NOT
+  // silence the alarm or dismiss the toast — only accepting the order does.
   const open = (toast) => {
-    stopAlarm()
-    setToasts((list) => list.filter((t) => t.id !== toast.id))
     navigate(toast.orderId ? `/orders?order=${toast.orderId}` : '/orders')
-  }
-
-  // Dismiss a single toast and silence the alarm without navigating.
-  const silence = (id) => {
-    stopAlarm()
-    setToasts((list) => list.filter((t) => t.id !== id))
   }
 
   return (
@@ -144,21 +129,9 @@ export default function OrderNotifications() {
               {t.total != null ? ` · ₹${t.total.toLocaleString('en-IN')}` : ''} · {t.name}
             </p>
             <p className="mt-0.5 text-[11px] font-semibold text-[#b45309]">
-              Awaiting payment verification · tap to open
+              Awaiting acceptance · tap to open &amp; accept
             </p>
           </div>
-          <span
-            role="button"
-            tabIndex={-1}
-            onClick={(e) => {
-              e.stopPropagation()
-              silence(t.id)
-            }}
-            className="shrink-0 text-ink-soft hover:text-ink"
-            aria-label="Dismiss and silence alarm"
-          >
-            <X className="h-4 w-4" />
-          </span>
         </button>
       ))}
     </div>

@@ -1842,7 +1842,7 @@ export default function Orders() {
                           <>
                             <CheckCircle2 className="h-4 w-4" /> Mark Ready
                             {remainingMs != null && (
-                              <span className="tabular-nums font-mono">· {fmtCountdown(remainingMs)}</span>
+                              <span className="tabular-nums font-mono font-extrabold">· {fmtCountdown(remainingMs)}</span>
                             )}
                           </>
                         )}
