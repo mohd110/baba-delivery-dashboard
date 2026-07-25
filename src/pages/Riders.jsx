@@ -9,6 +9,8 @@ import {
   ExternalLink,
   UserPlus,
   X,
+  ShieldCheck,
+  IdCard,
 } from 'lucide-react'
 import Topbar, { SearchBox, TopIcons } from '../layout/Topbar.jsx'
 import { supabase, createIsolatedClient } from '../lib/supabase.js'
@@ -140,7 +142,19 @@ export default function Riders() {
   const [searchQuery, setSearchQuery] = useState('')
   const [showAdd, setShowAdd] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [form, setForm] = useState({ name: '', phone: '', email: '', password: '' })
+  const [form, setForm] = useState({
+    name: '',
+    phone: '',
+    email: '',
+    password: '',
+    vehicleType: 'bike',
+    vehicleRegistration: '',
+    vehicleMakeModel: '',
+    vehicleColor: '',
+    insuranceActive: false,
+    licenseNumber: '',
+    aadharNumber: '',
+  })
 
   const load = useCallback(() => {
     // Orders with a rider assigned are always readable by the restaurant via the
@@ -188,20 +202,65 @@ export default function Riders() {
       alert('Enter a name, email, and a password of at least 6 characters.')
       return
     }
+    // Vehicle + KYC details persisted onto the new rider's profile row.
+    const details = {
+      vehicle_type: form.vehicleType,
+      vehicle_registration: form.vehicleRegistration.trim().toUpperCase() || null,
+      vehicle_make_model: form.vehicleMakeModel.trim() || null,
+      vehicle_color: form.vehicleColor.trim() || null,
+      insurance_active: form.insuranceActive,
+      license_number: form.licenseNumber.trim().toUpperCase() || null,
+      aadhar_number: form.aadharNumber.replace(/\s+/g, '') || null,
+    }
+
     setSaving(true)
     const client = createIsolatedClient()
-    const { error } = await client.auth.signUp({
+    const { data, error } = await client.auth.signUp({
       email,
       password,
-      options: { data: { role: 'rider', full_name: name, phone } },
+      options: { data: { role: 'rider', full_name: name, phone, ...details } },
     })
-    setSaving(false)
     if (error) {
+      setSaving(false)
       alert(`Could not add rider: ${error.message}`)
       return
     }
+
+    // Write the vehicle/KYC details onto the profile row. The signup client is
+    // now authenticated as the new rider, so "update own profile" RLS covers it;
+    // fall back to the admin client (and a short retry, in case the trigger
+    // hasn't inserted the row yet). Non-fatal — the login is already created.
+    const newId = data?.user?.id
+    if (newId) {
+      const writeDetails = async () => {
+        let res = await client.from('profiles').update(details).eq('id', newId)
+        if (res.error || res.count === 0) {
+          res = await supabase.from('profiles').update(details).eq('id', newId)
+        }
+        return res.error
+      }
+      if (await writeDetails()) {
+        await new Promise((r) => setTimeout(r, 700))
+        const err = await writeDetails()
+        if (err) console.error('Failed to save rider details:', err.message)
+      }
+    }
+
+    setSaving(false)
     setShowAdd(false)
-    setForm({ name: '', phone: '', email: '', password: '' })
+    setForm({
+      name: '',
+      phone: '',
+      email: '',
+      password: '',
+      vehicleType: 'bike',
+      vehicleRegistration: '',
+      vehicleMakeModel: '',
+      vehicleColor: '',
+      insuranceActive: false,
+      licenseNumber: '',
+      aadharNumber: '',
+    })
     // Give the trigger a beat to insert the profile row, then refresh.
     setTimeout(load, 600)
   }
@@ -352,7 +411,7 @@ export default function Riders() {
       {/* Add Rider dialog */}
       {showAdd && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <form onSubmit={addRider} className="w-full max-w-md rounded-2xl bg-white shadow-xl">
+          <form onSubmit={addRider} className="flex max-h-[90vh] w-full max-w-lg flex-col rounded-2xl bg-white shadow-xl">
             <div className="flex items-center justify-between border-b border-line p-5">
               <div className="flex items-center gap-2">
                 <span className="rounded-lg bg-brand-light p-2 text-brand">
@@ -372,54 +431,157 @@ export default function Riders() {
               </button>
             </div>
 
-            <div className="space-y-4 p-5">
-              <div>
-                <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-ink-soft">
-                  Full name
-                </label>
-                <input
-                  autoFocus
-                  value={form.name}
-                  onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                  placeholder="e.g. Ramesh Kumar"
-                  className="w-full rounded-lg border border-line px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none"
-                />
+            <div className="flex-1 space-y-5 overflow-y-auto p-5">
+              {/* Account / login */}
+              <div className="space-y-4">
+                <div>
+                  <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-ink-soft">
+                    Full name
+                  </label>
+                  <input
+                    autoFocus
+                    value={form.name}
+                    onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                    placeholder="e.g. Ramesh Kumar"
+                    className="w-full rounded-lg border border-line px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-ink-soft">
+                      Phone
+                    </label>
+                    <input
+                      value={form.phone}
+                      onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
+                      placeholder="e.g. 98765 43210"
+                      className="w-full rounded-lg border border-line px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-ink-soft">
+                      Login email
+                    </label>
+                    <input
+                      type="email"
+                      value={form.email}
+                      onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
+                      placeholder="rider@example.com"
+                      className="w-full rounded-lg border border-line px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-ink-soft">
+                    Temporary password
+                  </label>
+                  <input
+                    type="text"
+                    value={form.password}
+                    onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
+                    placeholder="At least 6 characters"
+                    className="w-full rounded-lg border border-line px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none"
+                  />
+                  <p className="mt-1 text-[11px] text-ink-soft">Share these credentials with the rider so they can log in to the delivery app.</p>
+                </div>
               </div>
-              <div>
-                <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-ink-soft">
-                  Phone
+
+              {/* Vehicle details */}
+              <div className="space-y-4 border-t border-line-soft pt-4">
+                <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-ink">
+                  <Bike className="h-3.5 w-3.5 text-brand" /> Vehicle Details
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-ink-soft">
+                      Vehicle type
+                    </label>
+                    <select
+                      value={form.vehicleType}
+                      onChange={(e) => setForm((f) => ({ ...f, vehicleType: e.target.value }))}
+                      className="w-full rounded-lg border border-line px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none"
+                    >
+                      <option value="bike">Motorcycle / Bike</option>
+                      <option value="scooter">Scooter / Scooty</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-ink-soft">
+                      Registration no.
+                    </label>
+                    <input
+                      value={form.vehicleRegistration}
+                      onChange={(e) => setForm((f) => ({ ...f, vehicleRegistration: e.target.value }))}
+                      placeholder="e.g. KA01AB1234"
+                      className="w-full rounded-lg border border-line px-3 py-2 text-sm uppercase text-ink focus:border-brand focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-ink-soft">
+                      Make &amp; model
+                    </label>
+                    <input
+                      value={form.vehicleMakeModel}
+                      onChange={(e) => setForm((f) => ({ ...f, vehicleMakeModel: e.target.value }))}
+                      placeholder="e.g. Honda Activa 6G"
+                      className="w-full rounded-lg border border-line px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-ink-soft">
+                      Colour
+                    </label>
+                    <input
+                      value={form.vehicleColor}
+                      onChange={(e) => setForm((f) => ({ ...f, vehicleColor: e.target.value }))}
+                      placeholder="e.g. Black"
+                      className="w-full rounded-lg border border-line px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none"
+                    />
+                  </div>
+                </div>
+                <label className="flex cursor-pointer items-center gap-2.5 rounded-lg border border-line bg-canvas/40 px-3 py-2.5">
+                  <input
+                    type="checkbox"
+                    checked={form.insuranceActive}
+                    onChange={(e) => setForm((f) => ({ ...f, insuranceActive: e.target.checked }))}
+                    className="h-4 w-4 rounded border-line text-brand accent-brand focus:ring-brand"
+                  />
+                  <span className="flex items-center gap-1.5 text-sm font-semibold text-ink">
+                    <ShieldCheck className="h-4 w-4 text-pos-dark" /> Insurance active
+                  </span>
                 </label>
-                <input
-                  value={form.phone}
-                  onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
-                  placeholder="e.g. 98765 43210"
-                  className="w-full rounded-lg border border-line px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none"
-                />
               </div>
-              <div>
-                <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-ink-soft">
-                  Login email
-                </label>
-                <input
-                  type="email"
-                  value={form.email}
-                  onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
-                  placeholder="rider@example.com"
-                  className="w-full rounded-lg border border-line px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-ink-soft">
-                  Temporary password
-                </label>
-                <input
-                  type="text"
-                  value={form.password}
-                  onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
-                  placeholder="At least 6 characters"
-                  className="w-full rounded-lg border border-line px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none"
-                />
-                <p className="mt-1 text-[11px] text-ink-soft">Share these credentials with the rider so they can log in to the delivery app.</p>
+
+              {/* Identity / KYC */}
+              <div className="space-y-4 border-t border-line-soft pt-4">
+                <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-ink">
+                  <IdCard className="h-3.5 w-3.5 text-brand" /> Identity &amp; KYC
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-ink-soft">
+                      Driving licence no.
+                    </label>
+                    <input
+                      value={form.licenseNumber}
+                      onChange={(e) => setForm((f) => ({ ...f, licenseNumber: e.target.value }))}
+                      placeholder="e.g. KA0120200001234"
+                      className="w-full rounded-lg border border-line px-3 py-2 text-sm uppercase text-ink focus:border-brand focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-ink-soft">
+                      Aadhaar no.
+                    </label>
+                    <input
+                      inputMode="numeric"
+                      value={form.aadharNumber}
+                      onChange={(e) => setForm((f) => ({ ...f, aadharNumber: e.target.value }))}
+                      placeholder="12-digit number"
+                      className="w-full rounded-lg border border-line px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none"
+                    />
+                  </div>
+                </div>
               </div>
             </div>
 

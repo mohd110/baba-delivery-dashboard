@@ -149,17 +149,52 @@ const AUTO_CANCEL_MINUTES = 10
 
 // --- Late-order buzzer (custom audio clip) ---------------------------------
 // Loops a custom "order running late" clip while a prep timer is expired.
-// Best-effort: silently skipped if the browser blocks autoplay (no user
-// interaction yet).
+//
+// An order going late fires programmatically (no click), so Chrome's autoplay
+// policy blocks a freshly-created <audio> element's play() — which is why the
+// buzzer went silent when this switched from the Web Audio beep. The fix: keep
+// ONE reusable element and "prime" it on the first user gesture (play muted,
+// then pause). That satisfies the policy, so a later gesture-less play() is
+// allowed. See unlockLateBuzzer() / the mount effect that wires it up.
 const LATE_ALARM_SRC = '/assets/late-order.mp3'
 let _buzzAudio = null
-function startBuzzer() {
-  if (_buzzAudio) return
+function ensureBuzzAudio() {
+  if (_buzzAudio) return _buzzAudio
+  if (typeof Audio === 'undefined') return null
+  const audio = new Audio(LATE_ALARM_SRC)
+  audio.loop = true
+  audio.preload = 'auto'
+  _buzzAudio = audio
+  return audio
+}
+let _buzzUnlocked = false
+// Called from the first user gesture: unlocks the element for later autoplay.
+function unlockLateBuzzer() {
+  if (_buzzUnlocked) return
+  const audio = ensureBuzzAudio()
+  if (!audio) return
+  _buzzUnlocked = true
+  audio.muted = true
+  const settle = () => {
+    try { audio.pause(); audio.currentTime = 0; audio.muted = false } catch { /* ignore */ }
+  }
   try {
-    const audio = new Audio(LATE_ALARM_SRC)
-    audio.loop = true
+    const p = audio.play()
+    if (p && typeof p.then === 'function') p.then(settle).catch(() => { audio.muted = false })
+    else settle()
+  } catch {
+    audio.muted = false
+  }
+}
+function startBuzzer() {
+  const audio = ensureBuzzAudio()
+  if (!audio) return
+  // Already buzzing — don't restart it from the top on every re-render.
+  if (!audio.paused && audio.currentTime > 0) return
+  try {
+    audio.muted = false
     audio.volume = 1
-    _buzzAudio = audio
+    audio.currentTime = 0
     const played = audio.play()
     if (played && typeof played.catch === 'function') {
       played.catch(() => { /* autoplay blocked until the page is interacted with */ })
@@ -176,7 +211,6 @@ function stopBuzzer() {
     } catch {
       /* already stopped */
     }
-    _buzzAudio = null
   }
 }
 
@@ -957,6 +991,23 @@ export default function Orders() {
   }, [alarmActive, soundMuted])
   // Belt-and-braces: silence the buzzer + voice if the page unmounts.
   useEffect(() => () => { stopBuzzer(); stopSpeaking() }, [])
+
+  // Prime the late-order buzzer on the first user interaction so the browser's
+  // autoplay policy lets it sound later when an order goes late (no click at
+  // that moment). Any pointer/key press anywhere counts; listeners self-remove.
+  useEffect(() => {
+    const onGesture = () => {
+      unlockLateBuzzer()
+      window.removeEventListener('pointerdown', onGesture)
+      window.removeEventListener('keydown', onGesture)
+    }
+    window.addEventListener('pointerdown', onGesture)
+    window.addEventListener('keydown', onGesture)
+    return () => {
+      window.removeEventListener('pointerdown', onGesture)
+      window.removeEventListener('keydown', onGesture)
+    }
+  }, [])
 
   // Ask for desktop-notification permission once, so late orders can alert the
   // manager even when the dashboard tab is in the background.

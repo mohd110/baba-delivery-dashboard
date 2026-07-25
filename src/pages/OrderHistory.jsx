@@ -10,6 +10,9 @@ import {
   Hash,
   Phone,
   Wallet,
+  Bike,
+  ShieldCheck,
+  ShieldAlert,
 } from 'lucide-react'
 import Topbar, { TopIcons } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
@@ -53,7 +56,7 @@ export default function OrderHistory() {
     return supabase
       .from('orders')
       .select(
-        '*, order_items(quantity, price_at_order, products(name, photo_url)), rider:profiles!orders_rider_id_fkey(full_name, phone)'
+        '*, order_items(quantity, price_at_order, products(name, photo_url)), rider:profiles!orders_rider_id_fkey(full_name, phone, vehicle_type, vehicle_registration, vehicle_make_model, vehicle_color, insurance_active)'
       )
       .in('status', ['delivered', 'cancelled', ...IN_PROGRESS])
       .order('created_at', { ascending: false })
@@ -110,11 +113,13 @@ export default function OrderHistory() {
       alert('No historical records in the current filter to export.')
       return
     }
-    const headers = ['Order ID', 'Date', 'Customer', 'Items', 'Total', 'Status']
+    const headers = ['Order ID', 'Date', 'Customer', 'Rider', 'Vehicle', 'Items', 'Total', 'Status']
     const rows = filteredOrders.map((o) => [
       orderCode(o),
       o.created_at ? new Date(o.created_at).toLocaleString('en-IN') : '',
       o.delivery_address?.name || 'Customer',
+      o.rider?.full_name || '',
+      o.rider?.vehicle_registration || '',
       o.order_items?.map((it) => `${it.quantity}x ${it.products?.name || 'Item'}`).join('; ') || '',
       o.total ?? 0,
       o.status,
@@ -218,6 +223,7 @@ export default function OrderHistory() {
                   <th className="px-6 py-3.5">Order ID</th>
                   <th className="px-6 py-3.5">Date & Time</th>
                   <th className="px-6 py-3.5">Customer</th>
+                  <th className="px-6 py-3.5">Rider</th>
                   <th className="px-6 py-3.5">Items Summary</th>
                   <th className="px-6 py-3.5">Total Amount</th>
                   <th className="px-6 py-3.5">Status</th>
@@ -226,13 +232,13 @@ export default function OrderHistory() {
               <tbody className="divide-y divide-line-soft">
                 {loading ? (
                   <tr>
-                    <td colSpan={6} className="px-6 py-12 text-center text-xs text-ink-soft">
+                    <td colSpan={7} className="px-6 py-12 text-center text-xs text-ink-soft">
                       Loading history log...
                     </td>
                   </tr>
                 ) : filteredOrders.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-6 py-16 text-center text-xs text-ink-soft">
+                    <td colSpan={7} className="px-6 py-16 text-center text-xs text-ink-soft">
                       <History className="h-8 w-8 mx-auto text-line-2 mb-2" />
                       <p className="font-semibold text-ink">No historical records found</p>
                       <p className="mt-1">Adjust filters or check back later</p>
@@ -269,6 +275,9 @@ export default function OrderHistory() {
                         <td className="px-6 py-4 text-xs text-ink-soft">{timestamp}</td>
                         <td className="px-6 py-4 text-xs font-semibold text-ink">
                           {o.delivery_address?.name || 'Customer'}
+                        </td>
+                        <td className="px-6 py-4 text-xs text-ink-soft">
+                          {o.rider?.full_name || <span className="text-line-2">Unassigned</span>}
                         </td>
                         <td className="px-6 py-4 text-xs text-ink-soft truncate max-w-[280px]" title={itemsText}>
                           {itemsText}
@@ -352,6 +361,54 @@ export default function OrderHistory() {
                   )}
                   <p className="text-ink-soft">{selectedOrder.delivery_address?.address || '—'}</p>
                 </div>
+              </div>
+
+              {/* Delivery Partner (rider) */}
+              <div>
+                <h4 className="text-[10px] font-bold uppercase tracking-wider text-ink-soft mb-1.5">
+                  Delivery Partner
+                </h4>
+                {selectedOrder.rider ? (
+                  <div className="rounded-lg border border-line p-3 text-xs space-y-2">
+                    <div className="flex items-center justify-between">
+                      <p className="font-bold text-ink">{selectedOrder.rider.full_name || 'Rider'}</p>
+                      {selectedOrder.rider.insurance_active ? (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-pos-soft px-2 py-0.5 text-[10px] font-bold text-pos-dark">
+                          <ShieldCheck className="h-3 w-3" /> Insured
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-700">
+                          <ShieldAlert className="h-3 w-3" /> No insurance
+                        </span>
+                      )}
+                    </div>
+                    {selectedOrder.rider.phone && (
+                      <p className="text-ink-soft flex items-center gap-1">
+                        <Phone className="h-3 w-3" /> {selectedOrder.rider.phone}
+                      </p>
+                    )}
+                    {(selectedOrder.rider.vehicle_registration || selectedOrder.rider.vehicle_make_model) && (
+                      <p className="text-ink-soft flex items-center gap-1.5">
+                        <Bike className="h-3.5 w-3.5" />
+                        <span>
+                          {[
+                            selectedOrder.rider.vehicle_make_model,
+                            selectedOrder.rider.vehicle_color,
+                          ].filter(Boolean).join(' · ')}
+                          {selectedOrder.rider.vehicle_registration && (
+                            <span className="ml-1 font-mono font-bold text-ink">
+                              {selectedOrder.rider.vehicle_registration}
+                            </span>
+                          )}
+                        </span>
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <div className="rounded-lg border border-line p-3 text-xs text-ink-soft">
+                    No rider assigned to this order.
+                  </div>
+                )}
               </div>
 
               {/* Items List */}
