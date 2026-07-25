@@ -233,10 +233,10 @@ export default function OrderHistory() {
                   <th className="px-6 py-3.5">Order ID</th>
                   <th className="px-6 py-3.5">Date & Time</th>
                   <th className="px-6 py-3.5">Customer</th>
-                  <th className="px-6 py-3.5">Rider</th>
                   <th className="px-6 py-3.5">Items Summary</th>
                   <th className="px-6 py-3.5">Total Amount</th>
                   <th className="px-6 py-3.5">Status</th>
+                  <th className="px-6 py-3.5">Rider</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-line-soft">
@@ -286,9 +286,6 @@ export default function OrderHistory() {
                         <td className="px-6 py-4 text-xs font-semibold text-ink">
                           {o.delivery_address?.name || 'Customer'}
                         </td>
-                        <td className="px-6 py-4 text-xs text-ink-soft">
-                          {o.rider?.full_name || <span className="text-line-2">Unassigned</span>}
-                        </td>
                         <td className="px-6 py-4 text-xs text-ink-soft truncate max-w-[280px]" title={itemsText}>
                           {itemsText}
                         </td>
@@ -297,6 +294,9 @@ export default function OrderHistory() {
                           <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold ${s.bg} ${s.text}`}>
                             <span className={`h-1.5 w-1.5 rounded-full ${s.dot}`} /> {s.label}
                           </span>
+                        </td>
+                        <td className="px-6 py-4 text-xs text-ink-soft">
+                          {o.rider?.full_name || <span className="text-line-2">Unassigned</span>}
                         </td>
                       </tr>
                     )

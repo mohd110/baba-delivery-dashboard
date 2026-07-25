@@ -1060,11 +1060,11 @@ export default function Orders() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lateIdsKey, loading])
 
-  // While anything stays late, keep nagging by voice every 5s (like Zomato)
+  // While anything stays late, keep nagging by voice every 30s (like Zomato)
   // until it's marked ready or the alert is muted (snoozing keeps it late).
   useEffect(() => {
     if (lateCount === 0 || soundMuted) return
-    const id = setInterval(() => speakLate(lateCount), 5000)
+    const id = setInterval(() => speakLate(lateCount), 30000)
     return () => clearInterval(id)
   }, [lateCount, soundMuted])
 
