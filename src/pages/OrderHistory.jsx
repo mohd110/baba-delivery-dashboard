@@ -52,19 +52,29 @@ export default function OrderHistory() {
   const [preset, setPreset] = useState('today')
   const [selectedOrderId, setSelectedOrderId] = useState(null)
 
-  const load = useCallback(() => {
-    return supabase
-      .from('orders')
-      .select(
-        '*, order_items(quantity, price_at_order, products(name, photo_url)), rider:profiles!orders_rider_id_fkey(full_name, phone, vehicle_type, vehicle_registration, vehicle_make_model, vehicle_color, insurance_active)'
-      )
-      .in('status', ['delivered', 'cancelled', ...IN_PROGRESS])
-      .order('created_at', { ascending: false })
-      .then(({ data, error }) => {
-        if (error) console.error('Failed to load order history:', error.message)
-        setOrders(data ?? [])
-        setLoading(false)
-      })
+  const load = useCallback(async () => {
+    // Rider join with the full vehicle/KYC detail. Those columns only exist
+    // after add-rider-details.sql has been run, so if the query fails we retry
+    // with just the always-present rider fields — the history must never blank
+    // out because the migration hasn't been applied yet.
+    const RIDER_FULL =
+      'rider:profiles!orders_rider_id_fkey(full_name, phone, vehicle_type, vehicle_registration, vehicle_make_model, vehicle_color, insurance_active)'
+    const RIDER_MIN = 'rider:profiles!orders_rider_id_fkey(full_name, phone)'
+    const query = (riderSel) =>
+      supabase
+        .from('orders')
+        .select(`*, order_items(quantity, price_at_order, products(name, photo_url)), ${riderSel}`)
+        .in('status', ['delivered', 'cancelled', ...IN_PROGRESS])
+        .order('created_at', { ascending: false })
+
+    let { data, error } = await query(RIDER_FULL)
+    if (error) {
+      // Most likely the vehicle columns don't exist yet — fall back.
+      ;({ data, error } = await query(RIDER_MIN))
+      if (error) console.error('Failed to load order history:', error.message)
+    }
+    setOrders(data ?? [])
+    setLoading(false)
   }, [])
 
   useEffect(() => {
