@@ -660,8 +660,19 @@ const DEFAULT_ETA = 15
 const NEXT_ACTION = {
   // Accept jumps straight to 'preparing' — no intermediate 'accepted' step.
   pending: { label: 'Accept Order', to: 'preparing', verifyPayment: true, icon: ShieldCheck, color: 'bg-brand hover:bg-brand-dark' },
+  // 'accepted' can still arrive from the customer app / older flow — treat it
+  // exactly like 'preparing' so it can be marked ready.
+  accepted: { label: 'Mark Ready', to: 'ready', icon: CheckCircle2, color: 'bg-pos hover:bg-pos-dark' },
   preparing: { label: 'Mark Ready', to: 'ready', icon: CheckCircle2, color: 'bg-pos hover:bg-pos-dark' },
 }
+
+// Statuses that mean "in the kitchen" (the Preparing tab). The dashboard writes
+// 'preparing' on accept, but 'accepted' can arrive from the customer app or an
+// older flow. Late detection MUST treat both the same — otherwise an 'accepted'
+// order sits in the tab counting down yet never triggers the late popup, sound
+// or blinking label, which is why the late alert seemed to fire inconsistently.
+const PREPARING_STATUSES = ['accepted', 'preparing']
+const isPreparingStatus = (status) => PREPARING_STATUSES.includes(status)
 
 const CANCELABLE = new Set(['pending', 'accepted', 'preparing', 'ready'])
 
@@ -910,7 +921,7 @@ export default function Orders() {
   // first. Drives the blinking card label, buzzer, voice and desktop alert —
   // all persist for as long as the order stays late.
   const lateOrders = activeOrders
-    .filter((o) => o.status === 'preparing' && lateAnchorOf(o) != null)
+    .filter((o) => isPreparingStatus(o.status) && lateAnchorOf(o) != null)
     .sort((a, b) => lateAnchorOf(a) - lateAnchorOf(b))
   const lateCount = lateOrders.length
   const lateIdsKey = lateOrders.map((o) => o.id).join(',')
@@ -933,7 +944,7 @@ export default function Orders() {
     setLateSince((prev) => {
       let next = prev
       const ensure = () => { if (next === prev) next = new Map(prev) }
-      const prep = activeOrders.filter((o) => o.status === 'preparing')
+      const prep = activeOrders.filter((o) => isPreparingStatus(o.status))
       const liveIds = new Set(prep.map((o) => o.id))
       prep.forEach((o) => {
         if (prev.has(o.id)) return
@@ -1042,7 +1053,7 @@ export default function Orders() {
     if (loading) return
     const knownIds = new Set(orders.map((o) => o.id))
     const prepIds = new Set(
-      activeOrders.filter((o) => o.status === 'preparing').map((o) => o.id)
+      activeOrders.filter((o) => isPreparingStatus(o.status)).map((o) => o.id)
     )
     setAlarmSnoozes((prev) => {
       if (prev.size === 0) return prev
@@ -1556,7 +1567,7 @@ export default function Orders() {
                 const isLate = activeTab === 'preparing' && minutes >= 15
 
                 // Live prep countdown for preparing orders.
-                const isPreparing = activeTab === 'preparing' && o.status === 'preparing'
+                const isPreparing = activeTab === 'preparing' && isPreparingStatus(o.status)
                 const readyTs = readyByTs(o)
                 const remainingMs = readyTs != null ? readyTs - nowTs : null
                 // Anchor-based lateness: once an order passes its original
@@ -1825,7 +1836,7 @@ export default function Orders() {
                   {/* Single Mark Ready / Order Late action — below the checklist.
                       When the order is overdue it blinks "Order Late" but still
                       marks the order ready on click. */}
-                  {selectedOrder.status === 'preparing' && (() => {
+                  {isPreparingStatus(selectedOrder.status) && (() => {
                     const anchor = lateSince.get(selectedOrder.id) ?? null
                     const late = anchor != null
                     const lateBy = late ? nowTs - anchor : 0
@@ -2053,7 +2064,7 @@ export default function Orders() {
                         </button>
                       )
                     })()
-                  ) : selectedOrder.status === 'preparing' ? (
+                  ) : isPreparingStatus(selectedOrder.status) ? (
                     // Mark Ready (and the "Order Late" state) live in the single
                     // button below the checklist, so the footer only shows Cancel.
                     null
