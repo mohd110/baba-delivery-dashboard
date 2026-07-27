@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { Fragment, useCallback, useEffect, useState } from 'react'
 import {
   Users,
   Repeat,
@@ -6,6 +6,8 @@ import {
   ShoppingBag,
   Phone,
   Crown,
+  MapPin,
+  ChevronDown,
 } from 'lucide-react'
 import Topbar, { SearchBox, TopIcons } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
@@ -68,6 +70,8 @@ function buildCustomers(orders) {
         key,
         name: addr.name || 'Customer',
         phone: addr.phone || null,
+        address: addr.address || null,
+        landmark: addr.landmark || null,
         orders: 0,
         spent: 0,
         cancelled: 0,
@@ -77,6 +81,10 @@ function buildCustomers(orders) {
     const c = map.get(key)
     if (addr.name && c.name === 'Customer') c.name = addr.name
     if (addr.phone && !c.phone) c.phone = addr.phone
+    // Orders arrive newest-first, so the first non-empty address we see is the
+    // customer's most recent delivery address.
+    if (addr.address && !c.address) c.address = addr.address
+    if (addr.landmark && !c.landmark) c.landmark = addr.landmark
     if (o.status === 'cancelled') {
       c.cancelled += 1
     } else {
@@ -94,6 +102,9 @@ export default function Customers() {
   const [range, setRange] = useState(null)
   const [preset, setPreset] = useState('month')
   const [searchQuery, setSearchQuery] = useState('')
+  // Which customer row has its address expanded (toggled by clicking the
+  // name or phone). Only one open at a time.
+  const [expandedKey, setExpandedKey] = useState(null)
 
   const load = useCallback(() => {
     return supabase
@@ -208,16 +219,26 @@ export default function Customers() {
                   </td>
                 </tr>
               ) : (
-                visibleCustomers.map((c, i) => (
-                  <tr key={c.key}>
+                visibleCustomers.map((c, i) => {
+                  const isOpen = expandedKey === c.key
+                  const toggle = () => setExpandedKey((k) => (k === c.key ? null : c.key))
+                  return (
+                  <Fragment key={c.key}>
+                  <tr className={isOpen ? 'bg-canvas/40' : ''}>
                     <td className="px-5 py-4">
                       <div className="flex items-center gap-3">
                         <span className={`flex h-9 w-9 items-center justify-center rounded-full text-xs font-bold ${toneFor(String(c.key))}`}>
                           {initials(c.name)}
                         </span>
                         <div>
-                          <p className="flex items-center gap-1.5 text-sm font-semibold text-ink">
+                          <button
+                            type="button"
+                            onClick={toggle}
+                            title="Show delivery address"
+                            className="flex items-center gap-1.5 text-left text-sm font-semibold text-ink hover:text-brand"
+                          >
                             {c.name}
+                            <ChevronDown className={`h-3.5 w-3.5 text-ink-soft transition-transform ${isOpen ? 'rotate-180' : ''}`} />
                             {i === 0 && c.spent > 0 && (
                               <span className="inline-flex items-center gap-1 rounded-full bg-[#fef3c7] px-1.5 py-0.5 text-[10px] font-bold uppercase text-[#b45309]">
                                 <Crown className="h-3 w-3" /> VIP
@@ -228,7 +249,7 @@ export default function Customers() {
                                 Repeat
                               </span>
                             )}
-                          </p>
+                          </button>
                           {c.cancelled > 0 && (
                             <p className="text-xs text-ink-soft">{c.cancelled} cancelled</p>
                           )}
@@ -237,9 +258,14 @@ export default function Customers() {
                     </td>
                     <td className="px-5 py-4">
                       {c.phone ? (
-                        <a href={`tel:${c.phone}`} className="flex items-center gap-1.5 text-sm text-ink hover:text-brand">
+                        <button
+                          type="button"
+                          onClick={toggle}
+                          title="Show delivery address"
+                          className="flex items-center gap-1.5 text-sm text-ink hover:text-brand"
+                        >
                           <Phone className="h-3.5 w-3.5 text-ink-soft" /> {c.phone}
-                        </a>
+                        </button>
                       ) : (
                         <span className="text-sm text-ink-soft">—</span>
                       )}
@@ -251,7 +277,49 @@ export default function Customers() {
                     </td>
                     <td className="px-5 py-4 text-right text-sm font-semibold text-ink-soft">{ago(c.lastAt)}</td>
                   </tr>
-                ))
+                  {isOpen && (
+                    <tr className="bg-canvas/40">
+                      <td colSpan={6} className="px-5 pb-4 pt-0">
+                        <div className="ml-12 rounded-lg border border-line bg-white p-3 text-xs">
+                          <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-ink-soft">
+                            Delivery Address
+                          </p>
+                          {c.address ? (
+                            <div className="flex items-start justify-between gap-3">
+                              <p className="text-ink-soft">
+                                <MapPin className="mr-1 inline h-3.5 w-3.5 text-ink-soft" />
+                                {c.address}
+                                {c.landmark ? ` (Landmark: ${c.landmark})` : ''}
+                              </p>
+                              <div className="flex shrink-0 items-center gap-2">
+                                {c.phone && (
+                                  <a
+                                    href={`tel:${c.phone}`}
+                                    className="rounded-lg border border-line px-2.5 py-1 font-semibold text-ink hover:border-brand hover:text-brand"
+                                  >
+                                    Call
+                                  </a>
+                                )}
+                                <a
+                                  href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(c.address)}`}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="rounded-lg bg-info-soft px-2.5 py-1 font-semibold text-info hover:opacity-90"
+                                >
+                                  Map
+                                </a>
+                              </div>
+                            </div>
+                          ) : (
+                            <p className="text-ink-soft">No saved address for this customer.</p>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
+                  )
+                })
               )}
             </tbody>
           </table>

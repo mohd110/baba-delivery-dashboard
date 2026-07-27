@@ -154,6 +154,8 @@ export default function Riders() {
     insuranceActive: false,
     licenseNumber: '',
     aadharNumber: '',
+    alternateContact: '',
+    alternateRelation: 'Father',
   })
 
   const load = useCallback(() => {
@@ -211,6 +213,8 @@ export default function Riders() {
       insurance_active: form.insuranceActive,
       license_number: form.licenseNumber.trim().toUpperCase() || null,
       aadhar_number: form.aadharNumber.replace(/\s+/g, '') || null,
+      alternate_contact: form.alternateContact.trim() || null,
+      alternate_contact_relation: form.alternateContact.trim() ? form.alternateRelation : null,
     }
 
     setSaving(true)
@@ -580,6 +584,31 @@ export default function Riders() {
                       placeholder="12-digit number"
                       className="w-full rounded-lg border border-line px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none"
                     />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-ink-soft">
+                      Alternate contact
+                    </label>
+                    <input
+                      value={form.alternateContact}
+                      onChange={(e) => setForm((f) => ({ ...f, alternateContact: e.target.value }))}
+                      placeholder="e.g. 98765 43210"
+                      className="w-full rounded-lg border border-line px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-ink-soft">
+                      Relation
+                    </label>
+                    <select
+                      value={form.alternateRelation}
+                      onChange={(e) => setForm((f) => ({ ...f, alternateRelation: e.target.value }))}
+                      className="w-full rounded-lg border border-line px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none"
+                    >
+                      {['Father', 'Mother', 'Spouse', 'Brother', 'Sister', 'Son', 'Daughter', 'Friend', 'Other'].map((rel) => (
+                        <option key={rel} value={rel}>{rel}</option>
+                      ))}
+                    </select>
                   </div>
                 </div>
               </div>

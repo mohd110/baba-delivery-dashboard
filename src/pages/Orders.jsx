@@ -1741,43 +1741,6 @@ export default function Orders() {
               <div className="grid flex-1 grid-cols-1 lg:grid-cols-3 gap-6 p-6">
                 {/* Left col: Customer, Dispatch & Payments */}
                 <div className="lg:col-span-2 space-y-6">
-                  {/* Delivery / Customer Details Card */}
-                  <div className="rounded-xl border border-line bg-white p-5 shadow-sm">
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-ink-soft mb-3">
-                      Delivery Details
-                    </h3>
-                    <div className="flex justify-between items-start">
-                      <div>
-                        <p className="text-sm font-bold text-ink">
-                          {selectedOrder.delivery_address?.name || 'Customer'}
-                        </p>
-                        {selectedOrder.delivery_address?.phone && (
-                          <p className="mt-1 text-xs text-ink-soft flex items-center gap-1.5">
-                            <Phone className="h-3.5 w-3.5" />
-                            <a href={`tel:${selectedOrder.delivery_address.phone}`} className="hover:text-brand font-semibold underline">
-                              {selectedOrder.delivery_address.phone}
-                            </a>
-                          </p>
-                        )}
-                        <p className="mt-2 text-xs text-ink-soft max-w-md">
-                          {selectedOrder.delivery_address?.address || '—'}
-                          {selectedOrder.delivery_address?.landmark ? ` (Landmark: ${selectedOrder.delivery_address.landmark})` : ''}
-                        </p>
-                      </div>
-
-                      {selectedOrder.delivery_latitude && selectedOrder.delivery_longitude && (
-                        <a
-                          href={`https://www.google.com/maps/search/?api=1&query=${selectedOrder.delivery_latitude},${selectedOrder.delivery_longitude}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="flex items-center gap-1.5 rounded-lg bg-info-soft px-3 py-1.5 text-xs font-semibold text-info hover:opacity-90 transition-opacity"
-                        >
-                          <MapPin className="h-3.5 w-3.5" /> View Map <ExternalLink className="h-3 w-3" />
-                        </a>
-                      )}
-                    </div>
-                  </div>
-
                   {/* Kitchen Checklist Card */}
                   <div className="rounded-xl border border-line bg-white p-5 shadow-sm">
                     <div className="flex justify-between items-center mb-1">
@@ -1897,6 +1860,43 @@ export default function Orders() {
 
                   {/* Zomato-style order timeline */}
                   <OrderTimeline order={selectedOrder} />
+
+                  {/* Delivery / Customer Details Card — below the timeline */}
+                  <div className="rounded-xl border border-line bg-white p-5 shadow-sm">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-ink-soft mb-3">
+                      Delivery Details
+                    </h3>
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <p className="text-sm font-bold text-ink">
+                          {selectedOrder.delivery_address?.name || 'Customer'}
+                        </p>
+                        {selectedOrder.delivery_address?.phone && (
+                          <p className="mt-1 text-xs text-ink-soft flex items-center gap-1.5">
+                            <Phone className="h-3.5 w-3.5" />
+                            <a href={`tel:${selectedOrder.delivery_address.phone}`} className="hover:text-brand font-semibold underline">
+                              {selectedOrder.delivery_address.phone}
+                            </a>
+                          </p>
+                        )}
+                        <p className="mt-2 text-xs text-ink-soft max-w-md">
+                          {selectedOrder.delivery_address?.address || '—'}
+                          {selectedOrder.delivery_address?.landmark ? ` (Landmark: ${selectedOrder.delivery_address.landmark})` : ''}
+                        </p>
+                      </div>
+
+                      {selectedOrder.delivery_latitude && selectedOrder.delivery_longitude && (
+                        <a
+                          href={`https://www.google.com/maps/search/?api=1&query=${selectedOrder.delivery_latitude},${selectedOrder.delivery_longitude}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="flex items-center gap-1.5 rounded-lg bg-info-soft px-3 py-1.5 text-xs font-semibold text-info hover:opacity-90 transition-opacity"
+                        >
+                          <MapPin className="h-3.5 w-3.5" /> View Map <ExternalLink className="h-3 w-3" />
+                        </a>
+                      )}
+                    </div>
+                  </div>
                 </div>
 
                 {/* Right col: Rider Details & Pricing */}

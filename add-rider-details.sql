@@ -12,17 +12,21 @@
 --   insurance_active      boolean — is the vehicle insurance currently valid
 --   license_number        rider's driving licence number
 --   aadhar_number         rider's 12-digit Aadhaar number (identity/KYC)
+--   alternate_contact             emergency / next-of-kin phone number
+--   alternate_contact_relation    relation to the rider (Father, Mother, …)
 --
 -- All are nullable so existing riders are unaffected.
 
 alter table public.profiles
-  add column if not exists vehicle_type          text,
-  add column if not exists vehicle_registration  text,
-  add column if not exists vehicle_make_model     text,
-  add column if not exists vehicle_color          text,
-  add column if not exists insurance_active       boolean default false,
-  add column if not exists license_number         text,
-  add column if not exists aadhar_number          text;
+  add column if not exists vehicle_type               text,
+  add column if not exists vehicle_registration       text,
+  add column if not exists vehicle_make_model          text,
+  add column if not exists vehicle_color               text,
+  add column if not exists insurance_active            boolean default false,
+  add column if not exists license_number              text,
+  add column if not exists aadhar_number               text,
+  add column if not exists alternate_contact           text,
+  add column if not exists alternate_contact_relation  text;
 
 -- The dashboard writes these fields with an authenticated UPDATE on the rider's
 -- own profile row immediately after signUp (the isolated signup client is signed
@@ -39,7 +43,8 @@ alter table public.profiles
 --   insert into public.profiles (
 --     id, role, full_name, phone,
 --     vehicle_type, vehicle_registration, vehicle_make_model, vehicle_color,
---     insurance_active, license_number, aadhar_number
+--     insurance_active, license_number, aadhar_number,
+--     alternate_contact, alternate_contact_relation
 --   ) values (
 --     new.id,
 --     new.raw_user_meta_data ->> 'role',
@@ -51,7 +56,9 @@ alter table public.profiles
 --     new.raw_user_meta_data ->> 'vehicle_color',
 --     coalesce((new.raw_user_meta_data ->> 'insurance_active')::boolean, false),
 --     new.raw_user_meta_data ->> 'license_number',
---     new.raw_user_meta_data ->> 'aadhar_number'
+--     new.raw_user_meta_data ->> 'aadhar_number',
+--     new.raw_user_meta_data ->> 'alternate_contact',
+--     new.raw_user_meta_data ->> 'alternate_contact_relation'
 --   );
 --   return new;
 -- end;
