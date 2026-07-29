@@ -23,6 +23,7 @@ import {
   AlertTriangle,
   Bell,
   BellOff,
+  UserCog,
 } from 'lucide-react'
 import Topbar, { TopIcons } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
@@ -92,15 +93,23 @@ function fmtLateBy(ms) {
 // column (the DB `late_since` write is a best-effort bonus for cross-device /
 // the customer app). Shape: { [orderId]: originalReadyByMs }.
 const LATE_STORE_KEY = 'wbf.lateSince'
+// Entries are normally pruned the moment their order leaves 'preparing'. That
+// needs the order to be in the loaded list, and `load()` only fetches unfinished
+// orders — so an order finished on *another* device would leave its entry behind
+// forever. Anything older than a day can't belong to a live prep timer, so it's
+// swept on read. Purely housekeeping: a stale entry can never raise an alert,
+// because lateness also requires a loaded order in a preparing status.
+const STALE_ENTRY_MS = 24 * 60 * 60 * 1000
 function loadLateAnchors() {
   try {
     const raw = localStorage.getItem(LATE_STORE_KEY)
     const obj = raw ? JSON.parse(raw) : null
     if (!obj || typeof obj !== 'object') return new Map()
+    const cutoff = Date.now() - STALE_ENTRY_MS
     return new Map(
       Object.entries(obj)
         .map(([id, ts]) => [id, Number(ts)])
-        .filter(([, ts]) => Number.isFinite(ts))
+        .filter(([, ts]) => Number.isFinite(ts) && ts > cutoff)
     )
   } catch {
     return new Map()
@@ -123,10 +132,13 @@ function loadAlarmSnoozes() {
     const raw = localStorage.getItem(ALARM_SNOOZE_KEY)
     const obj = raw ? JSON.parse(raw) : null
     if (!obj || typeof obj !== 'object') return new Map()
+    // Same day-old sweep as the late anchors above — a snooze deadline that far
+    // in the past has already lapsed, so dropping it changes nothing.
+    const cutoff = Date.now() - STALE_ENTRY_MS
     return new Map(
       Object.entries(obj)
         .map(([id, ts]) => [id, Number(ts)])
-        .filter(([, ts]) => Number.isFinite(ts))
+        .filter(([, ts]) => Number.isFinite(ts) && ts > cutoff)
     )
   } catch {
     return new Map()
@@ -142,6 +154,26 @@ function saveAlarmSnoozes(map) {
 
 // Minutes added to eta_minutes when the manager snoozes an expired prep timer.
 const SNOOZE_MIN = 5
+
+/* The single deadline the "+5 min" button produces: the order becomes due
+ * SNOOZE_MIN minutes from `from`, rounded UP to a whole minute of eta_minutes
+ * (the column is integer minutes) so that readyByTs() lands exactly on `dueAt`
+ * instead of up to 30s either side, and the manager always gets at least the
+ * full five minutes.
+ *
+ * Both the popup's countdown preview and addPrepTime() call this, so the time
+ * shown, the time written to eta_minutes, and the time the popup re-opens are
+ * the same number by construction — they cannot drift apart again. */
+function snoozeDeadline(order, from = Date.now()) {
+  const start = prepStartTs(order)
+  const etaMinutes = Math.max(1, Math.ceil((from + SNOOZE_MIN * 60000 - start) / 60000))
+  return { etaMinutes, dueAt: start + etaMinutes * 60000 }
+}
+
+// A timestamp as a short local clock time, e.g. "7:42 PM".
+function fmtClock(ts) {
+  return new Date(ts).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' })
+}
 // How long the card blinks and the buzzer sounds after a timer runs out.
 const ALARM_MS = 60000
 // Pending orders not accepted within this window are auto-cancelled.
@@ -237,15 +269,20 @@ function stopSpeaking() {
   try { window.speechSynthesis?.cancel() } catch { /* ignore */ }
 }
 
-// Fire a one-off desktop notification for a newly-late order so the manager
-// is alerted even when the dashboard tab isn't focused. No-op without
+// Fire a desktop notification for a late order so the manager is alerted even
+// when the dashboard tab isn't focused — which is exactly when a background tab
+// has its timers throttled and the on-screen popup can't be seen. No-op without
 // permission (requested once on mount).
-function notifyLateDesktop(order) {
+//
+// `nonce` makes the notification tag unique per *alert*, not per order: without
+// it the browser silently coalesces a re-alert (after a +5 min snooze lapses)
+// into the original notification and nothing is shown the second time.
+function notifyLateDesktop(order, nonce = '') {
   try {
     if (!('Notification' in window) || Notification.permission !== 'granted') return
     const n = new Notification('⏰ Order running late', {
       body: `Order ${orderCode(order)} has passed its prep time. Mark it ready or add time.`,
-      tag: `late-${order.id}`,
+      tag: `late-${order.id}${nonce ? `-${nonce}` : ''}`,
       requireInteraction: true,
     })
     n.onclick = () => { try { window.focus() } catch { /* ignore */ } n.close() }
@@ -775,6 +812,12 @@ export default function Orders() {
   // announcing throughout. Persisted so a reload doesn't re-open the popup.
   // Ids are pruned once the order is no longer late.
   const [alarmSnoozes, setAlarmSnoozes] = useState(loadAlarmSnoozes)
+  // Rider roster for the "change rider" picker on the order detail. Loaded once
+  // (riders change rarely) and tolerant of RLS refusals — the picker just stays
+  // empty rather than breaking the page.
+  const [riderRoster, setRiderRoster] = useState([])
+  const [reassignTarget, setReassignTarget] = useState(null)
+  const [reassigning, setReassigning] = useState(false)
   // id -> original ready-by timestamp, captured the first moment an order goes
   // overdue. Kept even when the manager adds prep time, so a snoozed order stays
   // counted as late (timed from its original due time). Cleared when the order
@@ -827,21 +870,52 @@ export default function Orders() {
     setShowCloseReason(false)
   }
 
-  // Load orders
+  // Mirrors of state read from async callbacks (realtime handler, load()).
+  // Refs rather than deps so neither `load` nor the realtime subscription has to
+  // be re-created — see the note on the subscription effect below.
+  const ordersRef = useRef([])
+  useEffect(() => { ordersRef.current = orders }, [orders])
+  const selectedOrderIdRef = useRef(null)
+  useEffect(() => { selectedOrderIdRef.current = selectedOrderId }, [selectedOrderId])
+
+  // Load orders.
+  //
+  // Scoped server-side to orders that aren't finished: this page only ever
+  // renders the pending / preparing / ready tabs (getTabForOrder's 'completed'
+  // bucket has no tab), so pulling the entire order history down and filtering
+  // it away in `activeOrders` meant the payload grew forever while the rendered
+  // set stayed the same size. `select('*')` stays — nearly every column is used
+  // here, and several are optional-by-migration, so naming them would 400 on a
+  // database that hasn't had every migration run.
   const load = useCallback(() => {
-    return supabase
-      .from('orders')
-      .select(
-        '*, order_items(id, quantity, price_at_order, products(name, photo_url)), rider:profiles!orders_rider_id_fkey(full_name, phone)'
-      )
-      .order('created_at', { ascending: false })
+    const base = () =>
+      supabase
+        .from('orders')
+        .select(
+          '*, order_items(id, quantity, price_at_order, products(name, photo_url)), rider:profiles!orders_rider_id_fkey(full_name, phone)'
+        )
+    const newest = (q) => q.order('created_at', { ascending: false })
+    // Exactly the set `activeOrders` keeps below. Spelled as an `or` rather
+    // than a bare `not.in` because SQL's NOT IN is null-unsafe: a row with a
+    // null status would evaluate to NULL and be dropped, where the JS filter
+    // it replaces would have kept it.
+    const ACTIVE_ONLY = 'status.is.null,status.not.in.(delivered,cancelled)'
+    return newest(base().or(ACTIVE_ONLY))
+      .then((res) => {
+        // Never let the optimisation cost us the page: if the server rejects
+        // the filter for any reason, fall back to the unfiltered query that
+        // this replaced. `activeOrders` narrows it down either way.
+        if (!res.error) return res
+        console.error('Filtered order load failed, retrying unfiltered:', res.error.message)
+        return newest(base())
+      })
       .then(({ data, error }) => {
         if (error) console.error('Failed to load orders:', error.message)
         const activeOrders = data ?? []
         setOrders(activeOrders)
-        
+
         // Auto-select first order if none is selected
-        if (activeOrders.length > 0 && !selectedOrderId) {
+        if (activeOrders.length > 0 && !selectedOrderIdRef.current) {
           // Find first order matching the default tab
           const tabOrders = activeOrders.filter(o => getTabForOrder(o) === 'pending')
           if (tabOrders.length > 0) {
@@ -852,23 +926,88 @@ export default function Orders() {
         }
         setLoading(false)
       })
-  }, [selectedOrderId])
+    // No deps: `load` must stay referentially stable, otherwise the effect below
+    // tears down and re-subscribes the realtime channel — and refetches every
+    // order — each time it changes. It used to depend on `selectedOrderId`,
+    // which meant *clicking an order in the list* re-ran the whole thing.
+  }, [])
 
   useEffect(() => {
     load()
     const channel = supabase
       .channel('orders-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => load())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) => {
+        // Status changes are the overwhelming majority of order events, and the
+        // UPDATE payload already carries the full row — so patch it in rather
+        // than re-downloading every order to learn about one changed field.
+        // (This page writes to `orders` itself — late_since, eta_minutes,
+        // auto-cancel — so the blanket refetch was also paying full price for
+        // its own writes.)
+        //
+        // Joined relations aren't in the payload, so we fall back to a full
+        // reload whenever they might be stale or the row leaves/enters the
+        // active set:
+        //   - anything that isn't an UPDATE (INSERT has no order_items yet)
+        //   - a row we don't currently hold
+        //   - rider_id changed, so the `rider` join is wrong
+        //   - the order finished, so it drops out of the server-side filter
+        if (payload.eventType !== 'UPDATE') { load(); return }
+        const row = payload.new
+        const cur = row?.id ? ordersRef.current.find((o) => o.id === row.id) : null
+        if (
+          !cur ||
+          cur.rider_id !== row.rider_id ||
+          ['delivered', 'cancelled'].includes(row.status)
+        ) {
+          load()
+          return
+        }
+        setOrders((prev) => prev.map((o) => (o.id === row.id ? { ...o, ...row } : o)))
+      })
       .subscribe()
     return () => {
       supabase.removeChannel(channel)
     }
   }, [load])
 
+  // Rider roster for the reassign picker.
+  useEffect(() => {
+    supabase
+      .from('profiles')
+      .select('id, full_name, phone, vehicle_registration_number')
+      .eq('role', 'rider')
+      .then(({ data, error }) => {
+        // vehicle_registration_number needs the rider app's 013 migration;
+        // retry without it so the picker still works on an older database.
+        if (error) {
+          return supabase
+            .from('profiles')
+            .select('id, full_name, phone')
+            .eq('role', 'rider')
+            .then(({ data: d }) => setRiderRoster(d ?? []))
+        }
+        setRiderRoster(data ?? [])
+      })
+  }, [])
+
   // Drive the live prep-time countdowns (re-render every second).
+  //
+  // Every late-alert decision is `nowTs >= <some wall-clock deadline>`, so this
+  // tick is what actually re-opens a snoozed popup. Chrome throttles timers in a
+  // hidden tab to roughly once a minute (and stops them entirely while the
+  // machine sleeps), so on a background dashboard `nowTs` drifts behind real
+  // time and the popup comes back late — or seemingly not at all. Re-syncing on
+  // visibility/focus makes it catch up the instant the tab is looked at again.
   useEffect(() => {
     const id = setInterval(() => setNowTs(Date.now()), 1000)
-    return () => clearInterval(id)
+    const sync = () => setNowTs(Date.now())
+    document.addEventListener('visibilitychange', sync)
+    window.addEventListener('focus', sync)
+    return () => {
+      clearInterval(id)
+      document.removeEventListener('visibilitychange', sync)
+      window.removeEventListener('focus', sync)
+    }
   }, [])
 
   // Get active tab assignment for each order
@@ -925,11 +1064,66 @@ export default function Orders() {
     .sort((a, b) => lateAnchorOf(a) - lateAnchorOf(b))
   const lateCount = lateOrders.length
   const lateIdsKey = lateOrders.map((o) => o.id).join(',')
-  // The order shown in the mark-ready popup (the most overdue one whose snooze
-  // has lapsed). Dismissing/snoozing never clears the persistent label.
-  const alarmOrder = lateOrders.find((o) => (alarmSnoozes.get(o.id) ?? 0) <= nowTs) || null
-  // Loud buzzer only for the first minute after an order first goes late.
-  const alarmActive = alarmOrder != null && nowTs - lateAnchorOf(alarmOrder) < ALARM_MS
+
+  // Late orders whose popup snooze has lapsed — i.e. that are due an alert right
+  // now. Most overdue first.
+  const dueOrders = lateOrders.filter((o) => (alarmSnoozes.get(o.id) ?? 0) <= nowTs)
+  const dueIdsKey = dueOrders.map((o) => o.id).join(',')
+
+  // The popup is *sticky*: once it opens for an order it stays on that order
+  // until the manager marks it ready, adds time or dismisses it. Previously the
+  // dialog just rendered `dueOrders[0]`, so a second order going late (or an
+  // older order's snooze lapsing) silently swapped the dialog — and because the
+  // list is sorted most-overdue-first, the swap could even happen mid-click.
+  // That reshuffling is the main reason the popup felt inconsistent.
+  const [alarmOrderId, setAlarmOrderId] = useState(null)
+  useEffect(() => {
+    setAlarmOrderId((cur) => {
+      if (cur && dueOrders.some((o) => o.id === cur)) return cur
+      return dueOrders[0]?.id ?? null
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dueIdsKey])
+  const alarmOrder = dueOrders.find((o) => o.id === alarmOrderId) || null
+
+  // Loud buzzer for ALARM_MS from the moment THIS popup opened — re-armed on
+  // every re-open. It used to be measured from the order's original late anchor,
+  // so the buzzer only ever sounded during the first minute an order was late:
+  // every popup that came back after a +5 min snooze was completely silent, and
+  // a silent popup on a background tab reads as "the alert didn't fire".
+  //
+  const [alarmOpenedAt, setAlarmOpenedAt] = useState(null)
+  useEffect(() => {
+    setAlarmOpenedAt(alarmOrderId ? Date.now() : null)
+  }, [alarmOrderId])
+  const alarmActive =
+    alarmOrder != null && alarmOpenedAt != null && nowTs - alarmOpenedAt < ALARM_MS
+
+  // Ids announced at least once during their current late episode. Declared up
+  // here because both the "freshly late" effect below and the re-open effect
+  // just underneath share it: whichever fires first owns the first alert, the
+  // other one stays quiet so a single event never double-notifies.
+  const announcedLateRef = useRef(new Set())
+  // Bumped on every popup re-open, purely to give each desktop notification a
+  // distinct tag.
+  const alertSeqRef = useRef(0)
+
+  // Re-fire the alert each time the popup RE-opens (i.e. after a +5 min snooze
+  // lapses), so a backgrounded tab still surfaces it. The first-time alert is
+  // handled by the freshly-late effect below, hence the `has(id)` guard.
+  useEffect(() => {
+    if (!alarmOrder) return
+    if (!announcedLateRef.current.has(alarmOrder.id)) return // first alert — not ours
+    // A counter, not `alarmOpenedAt`: that state is set by the effect above,
+    // which runs in the same pass, so it still holds the *previous* open's
+    // value here. All the nonce has to do is differ from the last one, or the
+    // browser coalesces this notification into the earlier one and shows
+    // nothing.
+    alertSeqRef.current += 1
+    notifyLateDesktop(alarmOrder, String(alertSeqRef.current))
+    if (!soundMuted) speakLate(lateCount)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [alarmOrderId])
 
   // Maintain the late-anchor map: capture each preparing order's ready-by time
   // the first moment it goes overdue, and forget orders that have left
@@ -1033,7 +1227,7 @@ export default function Orders() {
   // Announce each order the moment it goes late: one desktop notification per
   // order plus a spoken alert. Ids drop out of the ref when no longer late so a
   // recurring lateness re-announces. Keyed on the set of late-order ids.
-  const announcedLateRef = useRef(new Set())
+  // (`announcedLateRef` is declared with the alarm state above.)
   useEffect(() => {
     const liveLate = new Set(lateOrders.map((o) => o.id))
     for (const id of announcedLateRef.current) {
@@ -1223,24 +1417,47 @@ export default function Orders() {
     await advance(order, { etaMinutes: Math.round(mins) })
   }
 
-  // Snooze an expired prep timer by adding 5 minutes. Writing eta_minutes back
-  // to the DB pushes the new ready-by time to the customer app automatically.
-  // The order stays flagged as late (timed from its original due time) — adding
-  // time only closes the popup, it doesn't reset the late clock.
+  // "+5 min": the order becomes due five minutes from NOW, and the popup comes
+  // back at exactly that moment. Writing eta_minutes to the DB also pushes the
+  // new ready-by time to the customer app. The order stays flagged as late
+  // (timed from its original due time) — adding time closes the popup, it
+  // doesn't reset the late clock.
+  //
+  // The one deadline below drives BOTH clocks, and that is the whole point.
+  // They used to be computed independently:
+  //     card countdown -> readyByTs() = prepStartTs + (eta + 5) minutes
+  //                       ...i.e. five minutes past the ORIGINAL due time
+  //     popup return   -> Date.now() + 5 minutes
+  //                       ...i.e. five minutes from the CLICK
+  // Those agree only if the manager clicks the instant the popup appears. Click
+  // it three minutes later and the card's timer hit 0:00 three minutes before
+  // the popup returned; click it again and the gap compounded. That drift is
+  // why the reminder looked like it fired at random. Now there is one deadline.
   const addPrepTime = async (order) => {
     if (!order) return
-    // Snooze the popup for the added minutes, then let it re-open so the
-    // manager is prompted again if the order is still not ready.
-    setAlarmSnoozes((s) => new Map(s).set(order.id, Date.now() + SNOOZE_MIN * 60000))
-    const prev = order.eta_minutes || 0
-    const next = prev + SNOOZE_MIN
-    patchLocal(order.id, { eta_minutes: next })
+    // Shared with the popup's preview, so what the manager was shown is exactly
+    // what gets written and exactly when the reminder returns. `nowTs` (not
+    // Date.now()) deliberately: it's the very value the preview was rendered
+    // with, so a click that lands a fraction of a second later can't round up
+    // to a different minute than the one on screen.
+    const { etaMinutes: nextEta, dueAt } = snoozeDeadline(order, nowTs)
+
+    const prevEta = order.eta_minutes || 0
+    setAlarmSnoozes((s) => new Map(s).set(order.id, dueAt))
+    patchLocal(order.id, { eta_minutes: nextEta })
     const { error } = await supabase
       .from('orders')
-      .update({ eta_minutes: next })
+      .update({ eta_minutes: nextEta })
       .eq('id', order.id)
     if (error) {
-      patchLocal(order.id, { eta_minutes: prev })
+      patchLocal(order.id, { eta_minutes: prevEta })
+      // Roll the snooze back too — otherwise a failed extension quietly hides
+      // the late popup for 5 minutes even though nothing was actually extended.
+      setAlarmSnoozes((s) => {
+        const next = new Map(s)
+        next.delete(order.id)
+        return next
+      })
       alert(`Could not extend prep time: ${error.message}`)
       return
     }
@@ -1248,6 +1465,46 @@ export default function Orders() {
       title: '⏱️ A little more time',
       body: `Your order needs ${SNOOZE_MIN} more minutes — thanks for your patience!`,
     })
+  }
+
+  // Re-assign (or clear) the rider on a delivery. Riders normally self-claim a
+  // ready order in the rider app; this is the manual override for when the
+  // claimed rider drops out, breaks down, or the wrong one picked it up.
+  //
+  // `rider_id` is a plain FK to profiles, so the change is a one-column update.
+  // We `.select()` back so an RLS refusal (0 rows, no error) is caught rather
+  // than looking like success — see add-rider-aadhar-image.sql for the policy.
+  const reassignRider = async (order, riderId) => {
+    if (!order || reassigning) return
+    const prevRiderId = order.rider_id ?? null
+    if ((riderId ?? null) === prevRiderId) { setReassignTarget(null); return }
+    setReassigning(true)
+    const picked = riderRoster.find((r) => r.id === riderId) || null
+    const { data, error } = await supabase
+      .from('orders')
+      .update({ rider_id: riderId ?? null })
+      .eq('id', order.id)
+      .select('id')
+    setReassigning(false)
+    if (error) {
+      alert(`Could not change the rider: ${error.message}`)
+      return
+    }
+    if (!data || data.length === 0) {
+      alert(
+        'The rider was not changed — the database rejected the update. Run ' +
+        'add-rider-aadhar-image.sql so dashboard staff are allowed to set ' +
+        'orders.rider_id.'
+      )
+      return
+    }
+    // Mirror the joined rider object locally so the card updates immediately;
+    // the realtime reload will replace it with the authoritative row shortly.
+    patchLocal(order.id, {
+      rider_id: riderId ?? null,
+      rider: picked ? { full_name: picked.full_name, phone: picked.phone } : null,
+    })
+    setReassignTarget(null)
   }
 
   // Open the cancellation dialog for an order (resets the reason picker).
@@ -1844,28 +2101,43 @@ export default function Orders() {
                     // timer is still running (e.g. "Mark Ready · 4:53").
                     const readyTs = readyByTs(selectedOrder)
                     const remainingMs = readyTs != null ? readyTs - nowTs : null
+                    // A pending "+5 min" / dismiss snooze. Once an order is late
+                    // both countdowns above are hidden, so without this the
+                    // manager had no way to see when the reminder was coming
+                    // back — it just reappeared at an unexplained moment.
+                    const snoozedUntil = alarmSnoozes.get(selectedOrder.id) ?? 0
+                    const reminderAt = late && snoozedUntil > nowTs ? snoozedUntil : null
                     return (
-                      <button
-                        type="button"
-                        disabled={busy === selectedOrder.id}
-                        onClick={() => advance(selectedOrder)}
-                        className={`flex w-full items-center justify-center gap-2 rounded-xl px-4 py-3.5 text-sm font-bold uppercase tracking-wide shadow-sm transition-colors disabled:opacity-50 ${
-                          late ? 'animate-alarm' : 'bg-pos text-white hover:bg-pos-dark'
-                        }`}
-                      >
-                        {late ? (
-                          <>
-                            <AlertTriangle className="h-4 w-4" /> Order Late · by {fmtLateBy(lateBy)} — Mark Ready
-                          </>
-                        ) : (
-                          <>
-                            <CheckCircle2 className="h-4 w-4" /> Mark Ready
-                            {remainingMs != null && (
-                              <span className="tabular-nums font-mono font-black text-base tracking-tight">· {fmtCountdown(remainingMs)}</span>
-                            )}
-                          </>
+                      <>
+                        <button
+                          type="button"
+                          disabled={busy === selectedOrder.id}
+                          onClick={() => advance(selectedOrder)}
+                          className={`flex w-full items-center justify-center gap-2 rounded-xl px-4 py-3.5 text-sm font-bold uppercase tracking-wide shadow-sm transition-colors disabled:opacity-50 ${
+                            late ? 'animate-alarm' : 'bg-pos text-white hover:bg-pos-dark'
+                          }`}
+                        >
+                          {late ? (
+                            <>
+                              <AlertTriangle className="h-4 w-4" /> Order Late · by {fmtLateBy(lateBy)} — Mark Ready
+                            </>
+                          ) : (
+                            <>
+                              <CheckCircle2 className="h-4 w-4" /> Mark Ready
+                              {remainingMs != null && (
+                                <span className="tabular-nums font-mono font-black text-base tracking-tight">· {fmtCountdown(remainingMs)}</span>
+                              )}
+                            </>
+                          )}
+                        </button>
+                        {reminderAt && (
+                          <p className="mt-1.5 flex items-center justify-center gap-1 text-[11px] font-semibold text-ink-soft">
+                            <Clock className="h-3 w-3" />
+                            Reminder returns at {fmtClock(reminderAt)}
+                            <span className="tabular-nums">({fmtCountdown(reminderAt - nowTs)})</span>
+                          </p>
                         )}
-                      </button>
+                      </>
                     )
                   })()}
 
@@ -1914,9 +2186,21 @@ export default function Orders() {
                 <div className="space-y-6">
                   {/* Assigned Rider Card */}
                   <div className="rounded-xl border border-line bg-white p-5 shadow-sm">
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-ink-soft mb-3">
-                      Assigned Rider
-                    </h3>
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-ink-soft">
+                        Assigned Rider
+                      </h3>
+                      {CANCELABLE.has(selectedOrder.status) && (
+                        <button
+                          type="button"
+                          onClick={() => setReassignTarget(selectedOrder)}
+                          className="flex items-center gap-1 rounded-lg border border-line px-2 py-1 text-[11px] font-bold text-ink-soft hover:bg-canvas hover:text-ink transition-colors"
+                        >
+                          <UserCog className="h-3.5 w-3.5" />
+                          {selectedOrder.rider ? 'Change' : 'Assign'}
+                        </button>
+                      )}
+                    </div>
                     {selectedOrder.rider ? (
                       <div className="space-y-3">
                         <div className="flex items-center gap-3">
@@ -2108,6 +2392,96 @@ export default function Orders() {
         </div>
       </div>
 
+      {/* Change / assign the rider on a delivery */}
+      {reassignTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="flex max-h-[85vh] w-full max-w-md flex-col rounded-2xl bg-white shadow-xl">
+            <div className="flex items-start justify-between border-b border-line p-5">
+              <div className="flex items-center gap-2">
+                <span className="rounded-lg bg-brand-light p-2 text-brand">
+                  <UserCog className="h-5 w-5" />
+                </span>
+                <div>
+                  <h3 className="text-base font-bold text-ink">Change delivery rider</h3>
+                  <p className="text-xs text-ink-soft">
+                    Order <OrderIdLabel order={reassignTarget} /> · pick who delivers it
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setReassignTarget(null)}
+                className="rounded p-1 text-ink-soft hover:bg-line-soft hover:text-ink"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-5">
+              {riderRoster.length === 0 ? (
+                <p className="py-6 text-center text-sm text-ink-soft">
+                  No riders found. Add one from the Riders page first.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {riderRoster.map((r) => {
+                    const current = r.id === reassignTarget.rider_id
+                    return (
+                      <button
+                        key={r.id}
+                        type="button"
+                        disabled={reassigning}
+                        onClick={() => reassignRider(reassignTarget, r.id)}
+                        className={`flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition-colors disabled:opacity-50 ${
+                          current
+                            ? 'border-brand bg-brand-light'
+                            : 'border-line hover:bg-canvas'
+                        }`}
+                      >
+                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-indigo-50 text-indigo-700">
+                          <Bike className="h-4 w-4" />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-bold text-ink">
+                            {r.full_name || 'Rider'}
+                          </span>
+                          <span className="block truncate text-xs text-ink-soft">
+                            {[r.phone, r.vehicle_registration_number].filter(Boolean).join(' · ') || '—'}
+                          </span>
+                        </span>
+                        {current && (
+                          <span className="shrink-0 text-[10px] font-bold uppercase tracking-wide text-brand">
+                            Current
+                          </span>
+                        )}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-between gap-3 border-t border-line p-5">
+              <button
+                type="button"
+                disabled={reassigning || !reassignTarget.rider_id}
+                onClick={() => reassignRider(reassignTarget, null)}
+                className="rounded-lg border border-line px-3 py-2.5 text-xs font-semibold text-red-600 hover:bg-red-50 disabled:opacity-40"
+              >
+                Unassign rider
+              </button>
+              <button
+                type="button"
+                onClick={() => setReassignTarget(null)}
+                className="rounded-lg border border-line px-4 py-2.5 text-xs font-semibold text-ink-soft hover:bg-canvas"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Prep-timer expired: buzzer + prompt to mark ready or add 5 minutes */}
       {alarmOrder && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
@@ -2143,6 +2517,16 @@ export default function Orders() {
                 {alarmOrder.delivery_address?.name || 'The customer'}&apos;s order has hit its prep
                 time. Mark it ready now, or add {SNOOZE_MIN} more minutes — the customer&apos;s ETA
                 updates automatically.
+              </p>
+              {/* Spells out the exact deadline "+{SNOOZE_MIN} min" will set. It
+                  reads from the same snoozeDeadline() the button writes, so the
+                  time promised here is the time the card counts down to AND the
+                  time this popup comes back. */}
+              <p className="mt-2 rounded-lg bg-canvas px-3 py-2 text-xs font-semibold text-ink-soft">
+                <Clock className="mr-1 inline h-3 w-3" />
+                +{SNOOZE_MIN} min sets the new ready time to{' '}
+                <span className="text-ink">{fmtClock(snoozeDeadline(alarmOrder, nowTs).dueAt)}</span>
+                {' '}— this reminder returns then.
               </p>
               <div className="mt-5 flex flex-col gap-2 sm:flex-row">
                 <button

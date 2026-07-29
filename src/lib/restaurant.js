@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 import { supabase } from './supabase.js'
 
 // Default trading hours: open 8:00 AM, close at midnight -> closed 12 AM–8 AM.
@@ -48,37 +48,69 @@ export function getClosedReason(open, close, isOpen, now = new Date(), autoSched
   return null
 }
 
-// Shared restaurant open-state + schedule, kept in sync via realtime. Every
-// consumer sees the same status because it all reads/writes the same rows.
-let channelSeq = 0
+/* ── Shared restaurant store ──────────────────────────────────────────────
+ * Every consumer sees the same status because it all reads/writes the same
+ * rows. This used to be plain per-hook state: each useRestaurant() call did its
+ * own `select('*')` and opened its own realtime channel (`restaurant-status-N`),
+ * so a page like Active Orders — which mounts the hook in DashboardLayout *and*
+ * in the page — paid for two fetches and held two channels for identical data.
+ *
+ * Now there is one module-level snapshot, one fetch and one channel, shared by
+ * ref-count. The hook's public API is unchanged. */
+let snapshot = { rows: [], loading: true }
+const listeners = new Set()
+let sharedChannel = null
+let refCount = 0
+
+function publish(next) {
+  snapshot = next
+  listeners.forEach((fn) => fn())
+}
+
+async function loadShared() {
+  const { data, error } = await supabase.from('restaurants').select('*').order('name', { ascending: true })
+  if (error) console.error('Failed to load restaurant status:', error.message)
+  publish({ rows: error ? snapshot.rows : (data ?? []), loading: false })
+}
+
+// react's useSyncExternalStore contract: returns an unsubscribe function.
+function subscribeShared(listener) {
+  listeners.add(listener)
+  refCount += 1
+  if (refCount === 1) {
+    sharedChannel = supabase
+      .channel('restaurant-status')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'restaurants' }, () => loadShared())
+      .subscribe()
+    loadShared()
+  }
+  // A second consumer mounting mid-session needs no fetch — `snapshot` already
+  // holds the rows, and useSyncExternalStore reads it synchronously.
+  return () => {
+    listeners.delete(listener)
+    refCount -= 1
+    if (refCount === 0 && sharedChannel) {
+      supabase.removeChannel(sharedChannel)
+      sharedChannel = null
+      // `snapshot.rows` is deliberately kept so a remount paints immediately;
+      // resubscribing refetches it.
+    }
+  }
+}
+
+const getSnapshot = () => snapshot
 
 export function useRestaurant() {
-  const [rows, setRows] = useState([])
-  const [loading, setLoading] = useState(true)
+  const { rows, loading } = useSyncExternalStore(subscribeShared, getSnapshot)
+  const setRows = useCallback(
+    (updater) => publish({ rows: updater(snapshot.rows), loading: snapshot.loading }),
+    []
+  )
+  const load = useCallback(() => loadShared(), [])
   // Re-tick every minute so the schedule-derived open/closed state updates even
   // when nothing else changes (a page left open at 01:59 must flip at 02:00).
-  // `is_open` itself arrives instantly via the realtime subscription below.
+  // `is_open` itself arrives instantly via the realtime subscription above.
   const [now, setNow] = useState(() => new Date())
-  // Unique channel name per hook instance so multiple consumers don't clash.
-  const [channelName] = useState(() => `restaurant-status-${++channelSeq}`)
-
-  const load = useCallback(async () => {
-    const { data, error } = await supabase.from('restaurants').select('*').order('name', { ascending: true })
-    if (error) console.error('Failed to load restaurant status:', error.message)
-    else setRows(data ?? [])
-    setLoading(false)
-  }, [])
-
-  useEffect(() => {
-    load()
-    const channel = supabase
-      .channel(channelName)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'restaurants' }, () => load())
-      .subscribe()
-    return () => {
-      supabase.removeChannel(channel)
-    }
-  }, [load, channelName])
 
   useEffect(() => {
     const id = setInterval(() => setNow(new Date()), 60 * 1000)
@@ -118,7 +150,7 @@ export function useRestaurant() {
       if (error) load()
       return { error }
     },
-    [rows, load]
+    [rows, load, setRows]
   )
 
   // Persist trading hours to every outlet.
@@ -135,7 +167,7 @@ export function useRestaurant() {
       }
       return { error }
     },
-    [rows]
+    [rows, setRows]
   )
 
   return {

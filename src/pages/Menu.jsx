@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import Topbar, { SearchBox, TopIcons, Divider, ProfileChip } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
+import { useRowMirror } from '../lib/realtimeRows.js'
 import { exportToCsv } from '../lib/csv.js'
 import { compressImage, supportsWebp } from '../lib/compressImage.js'
 
@@ -479,6 +480,9 @@ export default function Menu() {
   // the one-time back-fill of sort_order so it never runs twice.
   const [reordering, setReordering]   = useState(false)
   const seededRef                     = useRef(false)
+  // True while the sort_order back-fill is writing, so its own realtime echoes
+  // don't each trigger a full menu reload.
+  const seedingRef                    = useRef(false)
 
   // Turn off modal
   const [turnOffTarget, setTurnOffTarget] = useState(null)
@@ -502,13 +506,22 @@ export default function Menu() {
       // Back-fill only the rows missing a value, numbering them in canonical
       // order after whatever's already set. Runs once per session.
       seededRef.current = true
+      // Each UPDATE below echoes back as a realtime event, and the subscription
+      // reloads the table — so seeding N dishes used to trigger N full product
+      // fetches. We already know every value we're writing, so suppress those
+      // reloads and apply the same numbers locally instead of re-reading them.
+      seedingRef.current = true
       let next = sorted.reduce((m, p) => Math.max(m, p.sort_order || 0), 0)
+      const seeded = new Map()
       await Promise.all(unseeded.map((p) => {
         next += 10
+        seeded.set(p.id, next)
         return supabase.from('products').update({ sort_order: next }).eq('id', p.id)
       }))
-      const { data: fresh } = await supabase.from('products').select('*')
-      setProducts(sortProducts(fresh ?? sorted))
+      seedingRef.current = false
+      setProducts(
+        sortProducts(sorted.map((p) => (seeded.has(p.id) ? { ...p, sort_order: seeded.get(p.id) } : p)))
+      )
       setLoading(false)
       return
     }
@@ -532,14 +545,27 @@ export default function Menu() {
     setCategories([...base, ...extras, ...others])
   }, [])
 
+  const productsRef = useRowMirror(products)
+
   useEffect(() => {
     load()
     loadCategories()
     const channel = supabase.channel('menu-products')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, () => load())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, (payload) => {
+        // Mid back-fill: we're writing these values ourselves and already know
+        // them, so ignore the echo rather than refetching the menu N times.
+        if (seedingRef.current) return
+        // A product row has no joins in this select, so an UPDATE payload is the
+        // complete new row — merge it and re-sort instead of re-reading every
+        // dish (a drag-to-reorder writes two rows and used to refetch twice).
+        if (payload.eventType !== 'UPDATE') { load(); return }
+        const row = payload.new
+        if (!row?.id || !productsRef.current.some((p) => p.id === row.id)) { load(); return }
+        setProducts((prev) => sortProducts(prev.map((p) => (p.id === row.id ? { ...p, ...row } : p))))
+      })
       .subscribe()
     return () => { supabase.removeChannel(channel) }
-  }, [load, loadCategories])
+  }, [load, loadCategories, productsRef])
 
   /* ── Reorder a dish within its category ── */
   // Swaps this dish's sort_order with its neighbour (dir -1 = up, +1 = down) in
@@ -1036,7 +1062,7 @@ export default function Menu() {
                   <tr key={p.id} className="hover:bg-line-soft/40 transition-colors">
                     <td className="px-5 py-4">
                       <div className="flex items-center gap-3">
-                        <img src={imgFor(p.name, p.photo_url)} alt="" className="h-12 w-12 rounded-lg bg-line-2 object-contain object-center" />
+                        <img src={imgFor(p.name, p.photo_url)} alt="" className="h-12 w-12 rounded-lg bg-line-2 object-contain object-center" loading="lazy" decoding="async" />
                         <div>
                           <p className="flex items-center gap-1.5 text-sm font-semibold text-ink">
                             <VegDot veg={productIsVeg(p)} /> {p.name}

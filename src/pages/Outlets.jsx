@@ -83,7 +83,7 @@ function OutletCard({ o }) {
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-center gap-3">
           {o.logo_url ? (
-            <img src={o.logo_url} alt={o.name} className="h-11 w-11 rounded-xl bg-line-2 object-cover" />
+            <img src={o.logo_url} alt={o.name} className="h-11 w-11 rounded-xl bg-line-2 object-cover" loading="lazy" decoding="async" />
           ) : (
             <span className={`flex h-11 w-11 items-center justify-center rounded-xl text-sm font-bold ${toneFor(o.id)}`}>
               {initials(o.name)}

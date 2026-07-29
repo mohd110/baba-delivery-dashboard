@@ -461,7 +461,7 @@ export default function Banners() {
             {banners.map((b, i) => (
               <div key={b.id} className={`overflow-hidden rounded-2xl border bg-white transition-opacity ${b.is_active ? 'border-line' : 'border-line opacity-60'}`}>
                 <div className="relative aspect-[16/7] w-full bg-line-2">
-                  <img src={b.image_url} alt="" className="h-full w-full object-cover" />
+                  <img src={b.image_url} alt="" className="h-full w-full object-cover" loading="lazy" decoding="async" />
                   <span className={`absolute left-2 top-2 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${b.is_active ? 'bg-pos-soft text-pos-dark' : 'bg-line-2 text-ink-soft'}`}>
                     {b.is_active ? 'Live' : 'Hidden'}
                   </span>

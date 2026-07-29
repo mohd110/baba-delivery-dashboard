@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 import Topbar, { SearchBox, TopIcons, Divider, ProfileChip } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
+import { patchRowFromEvent, useRowMirror } from '../lib/realtimeRows.js'
 import { orderCode } from '../lib/format.js'
 import { boldLast4 } from '../components/OrderIdLabel.jsx'
 import DateRangeFilter from '../components/DateRangeFilter.jsx'
@@ -92,7 +93,7 @@ function OrderRow({ img, name, id, price, status }) {
   return (
     <div className="flex items-center justify-between py-2">
       <div className="flex items-center gap-3">
-        <img src={img} alt="" className="h-10 w-10 rounded-lg bg-line-2 object-cover" />
+        <img src={img} alt="" className="h-10 w-10 rounded-lg bg-line-2 object-cover" loading="lazy" decoding="async" />
         <div>
           <p className="text-sm font-semibold text-ink">{name}</p>
           <p className="text-xs text-ink-soft">{boldLast4(id)}</p>
@@ -188,6 +189,8 @@ export default function Overview() {
   const [searchQuery, setSearchQuery] = useState('')
   const navigate = useNavigate()
 
+  const ordersRef = useRowMirror(orders)
+
   useEffect(() => {
     let alive = true
     const load = () =>
@@ -202,17 +205,20 @@ export default function Overview() {
         })
 
     load()
-    // Keep the overview live as orders arrive / change status.
+    // Keep the overview live as orders arrive / change status — merging the
+    // changed row rather than re-downloading every order for each event.
     const channel = supabase
       .channel('overview-orders')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => load())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) =>
+        patchRowFromEvent(payload, { rowsRef: ordersRef, setRows: setOrders, reload: load })
+      )
       .subscribe()
 
     return () => {
       alive = false
       supabase.removeChannel(channel)
     }
-  }, [])
+  }, [ordersRef])
 
   // KPIs respect the selected date range. Cancelled orders never earned money,
   // so keep them out of revenue figures.

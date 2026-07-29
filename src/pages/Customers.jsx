@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import Topbar, { SearchBox, TopIcons } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
+import { patchRowFromEvent, useRowMirror } from '../lib/realtimeRows.js'
 import DateRangeFilter from '../components/DateRangeFilter.jsx'
 import { inRange, rangeLabel } from '../lib/dateRange.js'
 
@@ -118,16 +119,20 @@ export default function Customers() {
       })
   }, [])
 
+  const ordersRef = useRowMirror(orders)
+
   useEffect(() => {
     load()
     const channel = supabase
       .channel('customers-page')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => load())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) =>
+        patchRowFromEvent(payload, { rowsRef: ordersRef, setRows: setOrders, reload: load })
+      )
       .subscribe()
     return () => {
       supabase.removeChannel(channel)
     }
-  }, [load])
+  }, [load, ordersRef])
 
   // Aggregate customers from only the orders inside the selected range, then
   // apply the free-text search for display.

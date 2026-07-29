@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import Topbar, { TopIcons } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
+import { patchRowFromEvent, useRowMirror } from '../lib/realtimeRows.js'
 import { orderCode } from '../lib/format.js'
 import { boldLast4 } from '../components/OrderIdLabel.jsx'
 import OrderTimeline from '../components/OrderTimeline.jsx'
@@ -58,7 +59,7 @@ export default function OrderHistory() {
     // with just the always-present rider fields — the history must never blank
     // out because the migration hasn't been applied yet.
     const RIDER_FULL =
-      'rider:profiles!orders_rider_id_fkey(full_name, phone, vehicle_type, vehicle_registration, vehicle_make_model, vehicle_color, insurance_active)'
+      'rider:profiles!orders_rider_id_fkey(full_name, phone, vehicle_type, vehicle_registration_number, vehicle_model, vehicle_color, insurance_active)'
     const RIDER_MIN = 'rider:profiles!orders_rider_id_fkey(full_name, phone)'
     const query = (riderSel) =>
       supabase
@@ -77,15 +78,20 @@ export default function OrderHistory() {
     setLoading(false)
   }, [])
 
+  const ordersRef = useRowMirror(orders)
+
   useEffect(() => {
     load()
-    // In-progress orders are live, so keep the list in sync as they advance.
+    // In-progress orders are live, so keep the list in sync as they advance —
+    // by merging the changed row rather than re-downloading the history.
     const channel = supabase
       .channel('order-history-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => load())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) =>
+        patchRowFromEvent(payload, { rowsRef: ordersRef, setRows: setOrders, reload: load })
+      )
       .subscribe()
     return () => { supabase.removeChannel(channel) }
-  }, [load])
+  }, [load, ordersRef])
 
   // Filter logic
   const filteredOrders = orders.filter((o) => {
@@ -129,7 +135,7 @@ export default function OrderHistory() {
       o.created_at ? new Date(o.created_at).toLocaleString('en-IN') : '',
       o.delivery_address?.name || 'Customer',
       o.rider?.full_name || '',
-      o.rider?.vehicle_registration || '',
+      o.rider?.vehicle_registration_number || '',
       o.order_items?.map((it) => `${it.quantity}x ${it.products?.name || 'Item'}`).join('; ') || '',
       o.total ?? 0,
       o.status,
@@ -397,17 +403,17 @@ export default function OrderHistory() {
                         <Phone className="h-3 w-3" /> {selectedOrder.rider.phone}
                       </p>
                     )}
-                    {(selectedOrder.rider.vehicle_registration || selectedOrder.rider.vehicle_make_model) && (
+                    {(selectedOrder.rider.vehicle_registration_number || selectedOrder.rider.vehicle_model) && (
                       <p className="text-ink-soft flex items-center gap-1.5">
                         <Bike className="h-3.5 w-3.5" />
                         <span>
                           {[
-                            selectedOrder.rider.vehicle_make_model,
+                            selectedOrder.rider.vehicle_model,
                             selectedOrder.rider.vehicle_color,
                           ].filter(Boolean).join(' · ')}
-                          {selectedOrder.rider.vehicle_registration && (
+                          {selectedOrder.rider.vehicle_registration_number && (
                             <span className="ml-1 font-mono font-bold text-ink">
-                              {selectedOrder.rider.vehicle_registration}
+                              {selectedOrder.rider.vehicle_registration_number}
                             </span>
                           )}
                         </span>

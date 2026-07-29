@@ -1,5 +1,16 @@
 -- Rider KYC + vehicle details.
--- Run this once in the Supabase SQL editor.
+--
+-- ⚠️ SUPERSEDED by add-rider-aadhar-image.sql — run that instead (it is safe to
+-- run on top of this one, and safe to run on its own).
+--
+-- Three of the columns below duplicate ones the RIDER APP already had, under
+-- different names, so nothing entered in the dashboard ever reached the rider
+-- app's profile screen:
+--     vehicle_make_model    →  rider app's vehicle_model
+--     vehicle_registration  →  rider app's vehicle_registration_number
+--     alternate_contact     →  rider app's emergency_contact_phone
+-- add-rider-aadhar-image.sql back-fills those into the rider app's columns and
+-- the dashboard now reads/writes the rider app's names. Kept here for history.
 --
 -- Riders are `profiles` rows (role = 'rider') created from the dashboard's
 -- "Add Rider" dialog via auth signUp. These columns store the vehicle and

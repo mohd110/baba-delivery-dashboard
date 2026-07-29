@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import Topbar, { TopIcons } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
+import { patchRowFromEvent, useRowMirror } from '../lib/realtimeRows.js'
 import DateRangeFilter from '../components/DateRangeFilter.jsx'
 import { inRange, rangeLabel } from '../lib/dateRange.js'
 import { exportToCsv } from '../lib/csv.js'
@@ -328,16 +329,20 @@ export default function Reports() {
       })
   }, [])
 
+  const ordersRef = useRowMirror(orders)
+
   useEffect(() => {
     load()
     const channel = supabase
       .channel('reports-page')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => load())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) =>
+        patchRowFromEvent(payload, { rowsRef: ordersRef, setRows: setOrders, reload: load })
+      )
       .subscribe()
     return () => {
       supabase.removeChannel(channel)
     }
-  }, [load])
+  }, [load, ordersRef])
 
   // Everything except the rolling 14-day trend respects the selected range.
   const scoped = orders.filter((o) => inRange(o.created_at, range))
