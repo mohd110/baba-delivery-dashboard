@@ -460,15 +460,19 @@ export default function OrderHistory() {
                   <div className="flex justify-between">
                     <span className="text-ink-soft">Payment Method</span>
                     <span className="font-semibold text-ink flex items-center gap-1">
-                      <Wallet className="h-3.5 w-3.5 text-ink-soft" /> UPI
+                      <Wallet className="h-3.5 w-3.5 text-ink-soft" />
+                      {selectedOrder.delivery_address?.payment === 'cod' ? 'Cash on Delivery' : 'UPI'}
                     </span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-ink-soft">Payment Status</span>
                     <span className={`font-semibold ${selectedOrder.payment_status === 'verified' ? 'text-pos-dark' : 'text-red-700'}`}>
-                      {selectedOrder.payment_status === 'verified' ? 'Verified' : 'Verification Failed'}
+                      {selectedOrder.delivery_address?.payment === 'cod'
+                        ? `Collected ₹${selectedOrder.total} in cash`
+                        : selectedOrder.payment_status === 'verified' ? 'Verified' : 'Verification Failed'}
                     </span>
                   </div>
+                  {/* utr_number is always null for COD orders — this naturally stays hidden */}
                   {selectedOrder.utr_number && (
                     <div className="flex justify-between border-t border-line-soft pt-2">
                       <span className="text-ink-soft">UTR Reference</span>

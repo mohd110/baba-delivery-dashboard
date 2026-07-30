@@ -334,6 +334,15 @@ function isAwaitingCustomer(order) {
   )
 }
 
+// Cash on Delivery — flagged via delivery_address.payment (no dedicated
+// column), same convention the customer app and rider app use. COD orders
+// have payment_status 'verified' immediately (nothing to check online) and
+// utr_number is always null, so there's nothing to verify here — just collect
+// cash at the door.
+function isCod(order) {
+  return order?.delivery_address?.payment === 'cod'
+}
+
 // Fire-and-forget push notification to the customer app. Failures are
 // logged but never block the order-status update they follow.
 async function notifyCustomer(order, { title, body }) {
@@ -485,7 +494,11 @@ function buildKotHtml(order) {
   const { token } = ticketNumbers(order)
   const items = order.order_items ?? []
   const type = (order.order_type || 'Delivery').replace(/\b\w/g, (c) => c.toUpperCase())
-  const paid = order.payment_status === 'verified'
+  // COD orders are marked payment_status 'verified' immediately (nothing to
+  // check online), so `paid` alone would wrongly print "Online Paid" and tell
+  // kitchen staff cash was already collected — exclude COD from it explicitly.
+  const cod = isCod(order)
+  const paid = order.payment_status === 'verified' && !cod
   const rows = items
     .map((it) => {
       const lineTotal = (it.price_at_order ?? 0) * (it.quantity ?? 1)
@@ -524,7 +537,7 @@ function buildKotHtml(order) {
       </table>
       <hr />
       ${note ? `<div class="line"><b>Customer Notes:</b> ${escapeHtml(note)}</div>` : ''}
-      <div class="line"><b>Payment Status :</b> ${paid ? 'Online Paid' : 'Pending'}</div>
+      <div class="line"><b>Payment Status :</b> ${cod ? `Cash on Delivery — Collect ₹${money(order.total)}` : paid ? 'Online Paid' : 'Pending'}</div>
       ${order.coupon_code ? `<div class="line"><b>Reward Type :</b> ${escapeHtml(order.coupon_code)}</div>` : ''}
       <div class="line"><b>Prepare By :</b> ${dateShort(prepBy)} ${timeShort(prepBy)}</div>
       <hr />
@@ -538,7 +551,10 @@ function buildBillHtml(order) {
   const items = order.order_items ?? []
   const { token, bill } = ticketNumbers(order)
   const type = (order.order_type || 'Delivery').replace(/\b\w/g, (c) => c.toUpperCase())
-  const paid = order.payment_status === 'verified'
+  // Same COD exclusion as the KOT above — a COD order isn't actually paid yet,
+  // so it shouldn't print the "PAID" stamp or "Paid via Online".
+  const cod = isCod(order)
+  const paid = order.payment_status === 'verified' && !cod
   const subtotal = items.reduce((s, it) => s + (it.price_at_order ?? 0) * (it.quantity ?? 1), 0)
   const totalQty = items.reduce((s, it) => s + (it.quantity ?? 1), 0)
   const rows = items
@@ -595,7 +611,7 @@ function buildBillHtml(order) {
       ${packagingRow}
       <hr />
       <div class="grand">Grand Total ₹${money(order.total)}</div>
-      <div class="small">Paid via ${paid ? 'Online' : 'Pending Payment'}</div>
+      <div class="small">${cod ? `Cash on Delivery — Collect ₹${money(order.total)}` : `Paid via ${paid ? 'Online' : 'Pending Payment'}`}</div>
       ${order.coupon_code ? `<hr /><div class="line"><b>Reward Type :</b> ${escapeHtml(order.coupon_code)}</div>` : ''}
       <hr />
       ${barcodeFoot(order, 'Scan to mark food ready')}
@@ -1907,6 +1923,11 @@ export default function Orders() {
                             Unpaid
                           </span>
                         )}
+                        {isCod(o) && (
+                          <span className="rounded bg-orange-100 text-orange-700 px-1.5 py-0.5 text-[9px] font-bold">
+                            💵 COD
+                          </span>
+                        )}
                         {isAwaitingCustomer(o) && (
                           <span className="flex items-center gap-1 rounded bg-amber-500 px-1.5 py-0.5 text-[9px] font-bold text-white">
                             <Hourglass className="h-2.5 w-2.5" /> On hold
@@ -1960,6 +1981,11 @@ export default function Orders() {
                         Order <OrderIdLabel order={selectedOrder} />
                       </h2>
                       <StatusBadge status={selectedOrder.status} />
+                      {isCod(selectedOrder) && (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-orange-50 px-2.5 py-0.5 text-xs font-semibold text-orange-700">
+                          💵 Cash on Delivery — collect ₹{selectedOrder.total} on delivery
+                        </span>
+                      )}
                       {selectedOrder.eta_minutes > 0 &&
                         !['delivered', 'cancelled'].includes(selectedOrder.status) && (
                           <span className="inline-flex items-center gap-1 rounded-full bg-brand-light px-2.5 py-0.5 text-xs font-semibold text-brand">
@@ -2282,10 +2308,17 @@ export default function Orders() {
                       <div className="mt-1 flex items-center justify-between">
                         <div className="flex items-center gap-1.5 text-xs font-semibold text-ink">
                           <Wallet className="h-3.5 w-3.5 text-ink-soft" />
-                          <span>UPI / Online</span>
+                          <span>{isCod(selectedOrder) ? 'Cash on Delivery' : 'UPI / Online'}</span>
                         </div>
-                        <PaymentBadge status={selectedOrder.payment_status} />
+                        {isCod(selectedOrder) ? (
+                          <span className="inline-flex items-center gap-1.5 rounded-full bg-orange-50 px-2.5 py-0.5 text-[11px] font-semibold text-orange-700">
+                            <span className="h-1.5 w-1.5 rounded-full bg-orange-500" /> Collect ₹{selectedOrder.total}
+                          </span>
+                        ) : (
+                          <PaymentBadge status={selectedOrder.payment_status} />
+                        )}
                       </div>
+                      {/* utr_number is always null for COD — this naturally stays hidden */}
                       {selectedOrder.utr_number && (
                         <p className="mt-1.5 font-mono text-[10px] text-ink-soft">
                           UTR: <span className="font-semibold text-ink">{selectedOrder.utr_number}</span>
