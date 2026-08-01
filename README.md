@@ -1,5 +1,25 @@
 # React + Vite
 
+## Environment variables
+
+Put these in `.env.local` for local dev, and in the Vercel project settings for
+production (Vite only exposes variables prefixed with `VITE_`):
+
+```
+VITE_SUPABASE_URL=https://<project>.supabase.co
+VITE_SUPABASE_ANON_KEY=<anon key>
+VITE_GOOGLE_MAPS_KEY=<same Google Maps key the rider/customer app uses>
+```
+
+`VITE_GOOGLE_MAPS_KEY` is the dashboard's copy of the rider app's
+`NEXT_PUBLIC_GOOGLE_MAPS_KEY` — same key, same Google Cloud project, so live
+tracking costs stay on one bill. The key's **HTTP referrer restrictions must
+include this dashboard's domain** (and `localhost` for dev) or Google will
+refuse to serve the map. Required APIs: *Maps JavaScript API*.
+
+Without the key the dashboard still works — the map buttons fall back to the
+plain "open in Google Maps" links they used before.
+
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
 Currently, two official plugins are available:

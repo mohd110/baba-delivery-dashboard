@@ -23,7 +23,10 @@ import Topbar, { SearchBox, TopIcons } from '../layout/Topbar.jsx'
 import { supabase, createIsolatedClient } from '../lib/supabase.js'
 import { compressImage } from '../lib/compressImage.js'
 import DateRangeFilter from '../components/DateRangeFilter.jsx'
+import LiveMap from '../components/LiveMap.jsx'
+import MapModal from '../components/MapModal.jsx'
 import { inRange, rangeLabel } from '../lib/dateRange.js'
+import { gmapsLink, hasMapsKey, toCoords } from '../lib/googleMaps.js'
 
 function initials(name = '') {
   const parts = name.split(' ').filter(Boolean).slice(0, 2)
@@ -585,6 +588,8 @@ export default function Riders() {
   const [editForm, setEditForm] = useState(EMPTY_FORM)
   const [editFile, setEditFile] = useState(null)
   const [revealAadhaar, setRevealAadhaar] = useState(false)
+  // Rider whose live position is open in the map dialog.
+  const [mapRiderId, setMapRiderId] = useState(null)
 
   /* The three datasets are fetched separately so a change to one doesn't
    * re-download the other two — see the subscription effect below. Orders with a
@@ -812,6 +817,11 @@ export default function Riders() {
     : riders
 
   const detailRider = riders.find((r) => r.id === detailId) || null
+  // `riders` already carries the newest location per rider (kept fresh by the
+  // rider_locations subscription above), so the map needs no extra query.
+  const mapRider = riders.find((r) => r.id === mapRiderId) || null
+  const mapRiderCoords = mapRider?.loc ? toCoords(mapRider.loc.latitude, mapRider.loc.longitude) : null
+  const detailCoords = detailRider?.loc ? toCoords(detailRider.loc.latitude, detailRider.loc.longitude) : null
 
   const onDelivery = riders.filter((r) => r.active > 0).length
   const available = riders.filter((r) => r.active === 0 && r.locStatus === 'online').length
@@ -991,15 +1001,30 @@ export default function Riders() {
                       <td className="px-5 py-4 text-sm font-semibold text-ink">{r.completed}</td>
                       <td className="px-5 py-4">
                         {r.loc ? (
-                          <a
-                            href={`https://www.google.com/maps/search/?api=1&query=${r.loc.latitude},${r.loc.longitude}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            onClick={(e) => e.stopPropagation()}
-                            className="inline-flex items-center gap-1 text-sm font-semibold text-info hover:underline"
-                          >
-                            <MapPin className="h-3.5 w-3.5" /> Live pin <ExternalLink className="h-3 w-3" />
-                          </a>
+                          // With a Maps key the pin opens the map in-dashboard;
+                          // without one it falls back to the Google Maps link.
+                          hasMapsKey() ? (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setMapRiderId(r.id)
+                              }}
+                              className="inline-flex items-center gap-1 text-sm font-semibold text-info hover:underline"
+                            >
+                              <MapPin className="h-3.5 w-3.5" /> Live pin
+                            </button>
+                          ) : (
+                            <a
+                              href={gmapsLink(r.loc.latitude, r.loc.longitude)}
+                              target="_blank"
+                              rel="noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              className="inline-flex items-center gap-1 text-sm font-semibold text-info hover:underline"
+                            >
+                              <MapPin className="h-3.5 w-3.5" /> Live pin <ExternalLink className="h-3 w-3" />
+                            </a>
+                          )
                         ) : (
                           <span className="text-sm text-ink-soft">—</span>
                         )}
@@ -1103,15 +1128,37 @@ export default function Riders() {
                   />
                 </div>
                 <Field label="Home address" value={detailRider.profile?.address} />
-                {detailRider.loc && (
-                  <a
-                    href={`https://www.google.com/maps/search/?api=1&query=${detailRider.loc.latitude},${detailRider.loc.longitude}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center gap-1 text-sm font-semibold text-info hover:underline"
-                  >
-                    <MapPin className="h-3.5 w-3.5" /> Live location <ExternalLink className="h-3 w-3" />
-                  </a>
+                {detailCoords && (
+                  <div className="space-y-2 rounded-xl border border-line bg-canvas/40 p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide text-ink-soft">
+                        <MapPin className="h-3.5 w-3.5" /> Live location
+                      </p>
+                      <span className="text-[11px] font-semibold text-ink-soft">
+                        {ago(detailRider.loc.updated_at)}
+                      </span>
+                    </div>
+                    {hasMapsKey() && (
+                      <LiveMap
+                        rider={detailCoords}
+                        className="h-44 w-full overflow-hidden rounded-lg"
+                        showRoute={false}
+                      />
+                    )}
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-mono text-[11px] text-ink-soft">
+                        {detailCoords.lat.toFixed(5)}, {detailCoords.lng.toFixed(5)}
+                      </span>
+                      <a
+                        href={gmapsLink(detailCoords.lat, detailCoords.lng)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 text-xs font-semibold text-info hover:underline"
+                      >
+                        Open in Google Maps <ExternalLink className="h-3 w-3" />
+                      </a>
+                    </div>
+                  </div>
                 )}
               </div>
 
@@ -1379,6 +1426,22 @@ export default function Riders() {
             </div>
           </form>
         </div>
+      )}
+
+      {/* Live rider position — opened from the "Live pin" column */}
+      {mapRider && (
+        <MapModal
+          title={`${mapRider.name} — live location`}
+          subtitle={
+            mapRider.loc
+              ? `Last GPS ping ${ago(mapRider.loc.updated_at)}${mapRider.active > 0 ? ` · ${mapRider.active} active ${mapRider.active === 1 ? 'delivery' : 'deliveries'}` : ''}`
+              : 'No GPS position reported yet'
+          }
+          riderName={mapRider.name}
+          rider={mapRiderCoords}
+          riderUpdatedAt={mapRider.loc?.updated_at ?? null}
+          onClose={() => setMapRiderId(null)}
+        />
       )}
     </>
   )

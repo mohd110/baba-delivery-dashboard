@@ -30,7 +30,11 @@ import { supabase } from '../lib/supabase.js'
 import { orderCode } from '../lib/format.js'
 import { OrderIdLabel } from '../components/OrderIdLabel.jsx'
 import OrderTimeline from '../components/OrderTimeline.jsx'
+import LiveMap from '../components/LiveMap.jsx'
+import MapModal from '../components/MapModal.jsx'
 import { useRestaurant, isAutoScheduleOn, setAutoScheduleOn } from '../lib/restaurant.js'
+import { useRiderLocation } from '../lib/riderLocation.js'
+import { gmapsLink, hasMapsKey, toCoords } from '../lib/googleMaps.js'
 
 function imgFor(name = '', photoUrl) {
   if (photoUrl) return photoUrl
@@ -834,6 +838,8 @@ export default function Orders() {
   const [riderRoster, setRiderRoster] = useState([])
   const [reassignTarget, setReassignTarget] = useState(null)
   const [reassigning, setReassigning] = useState(false)
+  // "View Map" dialog for the open order (outlet + address + live rider).
+  const [showOrderMap, setShowOrderMap] = useState(false)
   // id -> original ready-by timestamp, captured the first moment an order goes
   // overdue. Kept even when the manager adds prep time, so a snoozed order stays
   // counted as late (timed from its original due time). Cleared when the order
@@ -842,6 +848,7 @@ export default function Orders() {
 
   // Restaurant open/closed state (shared with Outlets + Settings).
   const {
+    rows: outlets,
     loading: storeLoading, setOpen: setStoreOpen,
     closedReason, effectiveOpen, openTime: storeOpenTime,
   } = useRestaurant()
@@ -893,6 +900,8 @@ export default function Orders() {
   useEffect(() => { ordersRef.current = orders }, [orders])
   const selectedOrderIdRef = useRef(null)
   useEffect(() => { selectedOrderIdRef.current = selectedOrderId }, [selectedOrderId])
+  // The tracking map belongs to one order — switching orders closes it.
+  useEffect(() => { setShowOrderMap(false) }, [selectedOrderId])
 
   // Load orders.
   //
@@ -1066,6 +1075,26 @@ export default function Orders() {
   // Selected order details — only within the current tab so the right panel
   // clears automatically when you switch to a tab that doesn't contain it.
   const selectedOrder = filteredOrders.find(o => o.id === selectedOrderId)
+
+  /* Live rider tracking for the open order only — one subscription for one
+   * rider, torn down when the detail panel closes. The rider app pushes GPS
+   * every few seconds, so watching the whole table here would be expensive. */
+  const trackedRiderId = selectedOrder?.rider_id ?? null
+  const riderLoc = useRiderLocation(trackedRiderId)
+  const riderCoords = riderLoc ? toCoords(riderLoc.latitude, riderLoc.longitude) : null
+  const customerCoords = selectedOrder
+    ? toCoords(selectedOrder.delivery_latitude, selectedOrder.delivery_longitude)
+    : null
+  const outletRow = selectedOrder
+    ? outlets.find((r) => r.id === selectedOrder.restaurant_id) ?? outlets[0] ?? null
+    : null
+  const outletCoords = outletRow ? toCoords(outletRow.latitude, outletRow.longitude) : null
+  // The position is the rider's, not the order's — a rider who has already moved
+  // on to another delivery still reports. Say so rather than implying the pin is
+  // this order's courier en route.
+  const riderOnOtherOrder = Boolean(
+    riderLoc?.order_id && selectedOrder && riderLoc.order_id !== selectedOrder.id
+  )
 
   // Time an order is judged "late" against: the original ready-by timestamp
   // captured the first moment it went overdue (see the maintenance effect
@@ -2194,16 +2223,28 @@ export default function Orders() {
                         </p>
                       </div>
 
-                      {selectedOrder.delivery_latitude && selectedOrder.delivery_longitude && (
-                        <a
-                          href={`https://www.google.com/maps/search/?api=1&query=${selectedOrder.delivery_latitude},${selectedOrder.delivery_longitude}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="flex items-center gap-1.5 rounded-lg bg-info-soft px-3 py-1.5 text-xs font-semibold text-info hover:opacity-90 transition-opacity"
-                        >
-                          <MapPin className="h-3.5 w-3.5" /> View Map <ExternalLink className="h-3 w-3" />
-                        </a>
-                      )}
+                      {/* With a Maps key this opens the tracking map inside the
+                          dashboard (address + outlet + live rider pin); without
+                          one it stays the plain Google Maps link it always was. */}
+                      {customerCoords &&
+                        (hasMapsKey() ? (
+                          <button
+                            type="button"
+                            onClick={() => setShowOrderMap(true)}
+                            className="flex items-center gap-1.5 rounded-lg bg-info-soft px-3 py-1.5 text-xs font-semibold text-info hover:opacity-90 transition-opacity"
+                          >
+                            <MapPin className="h-3.5 w-3.5" /> View Map
+                          </button>
+                        ) : (
+                          <a
+                            href={gmapsLink(customerCoords.lat, customerCoords.lng)}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="flex items-center gap-1.5 rounded-lg bg-info-soft px-3 py-1.5 text-xs font-semibold text-info hover:opacity-90 transition-opacity"
+                          >
+                            <MapPin className="h-3.5 w-3.5" /> View Map <ExternalLink className="h-3 w-3" />
+                          </a>
+                        ))}
                     </div>
                   </div>
                 </div>
@@ -2250,6 +2291,53 @@ export default function Orders() {
                             ? 'Rider assigned, traveling to outlet'
                             : 'Out for delivery to customer'}
                         </div>
+
+                        {/* Where the rider is right now. Fed by the rider app's
+                            GPS pings — the box only appears once one arrives, so
+                            an order with no tracking looks exactly as before. */}
+                        {riderCoords && (
+                          <div className="space-y-2 rounded-lg border border-line bg-canvas/40 p-2.5">
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-ink-soft">
+                                <MapPin className="h-3.5 w-3.5" /> Current location
+                              </p>
+                              <span className="text-[10px] font-semibold text-ink-soft">
+                                {riderLoc?.updated_at ? `${elapsed(riderLoc.updated_at)} ago` : ''}
+                              </span>
+                            </div>
+                            {hasMapsKey() && (
+                              <LiveMap
+                                rider={riderCoords}
+                                restaurant={outletCoords}
+                                customer={customerCoords}
+                                className="h-40 w-full overflow-hidden rounded-md"
+                              />
+                            )}
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-mono text-[10px] text-ink-soft">
+                                {riderOnOtherOrder ? 'On another order' : `${riderCoords.lat.toFixed(5)}, ${riderCoords.lng.toFixed(5)}`}
+                              </span>
+                              {hasMapsKey() ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setShowOrderMap(true)}
+                                  className="inline-flex items-center gap-1 text-[11px] font-semibold text-info hover:underline"
+                                >
+                                  Expand map
+                                </button>
+                              ) : (
+                                <a
+                                  href={gmapsLink(riderCoords.lat, riderCoords.lng)}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="inline-flex items-center gap-1 text-[11px] font-semibold text-info hover:underline"
+                                >
+                                  Open in Google Maps <ExternalLink className="h-3 w-3" />
+                                </a>
+                              )}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     ) : (
                       <div className="py-4 text-center">
@@ -2847,6 +2935,26 @@ export default function Orders() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Order tracking map — outlet, delivery address and the live rider pin */}
+      {showOrderMap && selectedOrder && (
+        <MapModal
+          title={`Order ${orderCode(selectedOrder)} — tracking`}
+          subtitle={
+            riderCoords
+              ? `${selectedOrder.rider?.full_name || 'Rider'} · GPS ${elapsed(riderLoc.updated_at)} ago${riderOnOtherOrder ? ' · currently on another order' : ''}`
+              : selectedOrder.rider
+              ? 'Rider assigned — waiting for their first GPS ping'
+              : 'No rider assigned yet'
+          }
+          riderName={selectedOrder.rider?.full_name || 'Rider'}
+          rider={riderCoords}
+          riderUpdatedAt={riderLoc?.updated_at ?? null}
+          restaurant={outletCoords}
+          customer={customerCoords}
+          onClose={() => setShowOrderMap(false)}
+        />
       )}
     </div>
   )
