@@ -2547,6 +2547,12 @@ export default function Orders() {
                 <div className="space-y-2">
                   {riderRoster.map((r) => {
                     const current = r.id === reassignTarget.rider_id
+                    // Excludes the order being reassigned itself, so the
+                    // rider it's currently on doesn't get an inflated count
+                    // from the very order we're about to move off them.
+                    const otherLoad = activeOrders.filter(
+                      (o) => o.rider_id === r.id && o.id !== reassignTarget.id
+                    ).length
                     return (
                       <button
                         key={r.id}
@@ -2570,6 +2576,11 @@ export default function Orders() {
                             {[r.phone, r.vehicle_registration_number].filter(Boolean).join(' · ') || '—'}
                           </span>
                         </span>
+                        {otherLoad > 0 && (
+                          <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">
+                            {otherLoad} active
+                          </span>
+                        )}
                         {current && (
                           <span className="shrink-0 text-[10px] font-bold uppercase tracking-wide text-brand">
                             Current

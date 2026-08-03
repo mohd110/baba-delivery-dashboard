@@ -522,7 +522,11 @@ function buildRiders(orders, roster, locs) {
   const upsert = (id, name, phone, profile) => {
     if (!id) return null
     if (!map.has(id)) {
-      map.set(id, { id, name: name || 'Rider', phone: phone || null, profile: profile || null, active: 0, completed: 0, total: 0, earned: 0, lastAt: null, loc: null, locStatus: null })
+      map.set(id, {
+        id, name: name || 'Rider', phone: phone || null, profile: profile || null,
+        active: 0, outForDelivery: 0, assignedOrders: [],
+        completed: 0, total: 0, earned: 0, lastAt: null, loc: null, locStatus: null,
+      })
     }
     const r = map.get(id)
     if (name && r.name === 'Rider') r.name = name
@@ -543,8 +547,16 @@ function buildRiders(orders, roster, locs) {
     if (o.status === 'delivered') {
       r.completed += 1
       r.earned += o.rider_payment || 0
-    } else if (o.status === 'out_for_delivery') {
+    } else if (o.status !== 'cancelled') {
+      // "Active" means the rider currently has this order in some
+      // non-terminal state — not just literally out for delivery. A rider
+      // who's claimed a second order but hasn't picked it up yet (still
+      // 'ready' at the restaurant) is just as occupied as one already on
+      // the road, and undercounting that here was hiding real multi-order
+      // load from staff.
       r.active += 1
+      r.assignedOrders.push({ id: o.id, orderNumber: o.order_number, status: o.status, total: o.total })
+      if (o.status === 'out_for_delivery') r.outForDelivery += 1
     }
     if (!r.lastAt || new Date(o.created_at) > new Date(r.lastAt)) r.lastAt = o.created_at
   })
@@ -600,7 +612,7 @@ export default function Riders() {
     () =>
       supabase
         .from('orders')
-        .select('id, status, total, rider_payment, created_at, rider_id, rider:profiles!orders_rider_id_fkey(id, full_name, phone)')
+        .select('id, order_number, status, total, rider_payment, created_at, rider_id, rider:profiles!orders_rider_id_fkey(id, full_name, phone)')
         .not('rider_id', 'is', null)
         .order('created_at', { ascending: false }),
     []
@@ -823,7 +835,10 @@ export default function Riders() {
   const mapRiderCoords = mapRider?.loc ? toCoords(mapRider.loc.latitude, mapRider.loc.longitude) : null
   const detailCoords = detailRider?.loc ? toCoords(detailRider.loc.latitude, detailRider.loc.longitude) : null
 
-  const onDelivery = riders.filter((r) => r.active > 0).length
+  // Specifically "out for delivery" (on the road), not just "has claimed
+  // something" — keeps the KPI's own "Out for delivery now" sub-label
+  // accurate now that r.active also counts orders still awaiting pickup.
+  const onDelivery = riders.filter((r) => r.outForDelivery > 0).length
   const available = riders.filter((r) => r.active === 0 && r.locStatus === 'online').length
   const totalDeliveries = riders.reduce((s, r) => s + r.completed, 0)
 
@@ -1104,6 +1119,44 @@ export default function Riders() {
                   <p className="text-[10px] font-semibold uppercase text-ink-soft">Last active</p>
                 </div>
               </div>
+
+              {/* Currently assigned orders — a rider can carry more than one
+                  at once (staff can assign a second order while they're
+                  already out), so this lists every one individually rather
+                  than just the count above. */}
+              {detailRider.assignedOrders.length > 0 && (
+                <div className="space-y-2">
+                  <SectionTitle icon={Truck}>
+                    {detailRider.assignedOrders.length > 1
+                      ? `Assigned Orders (${detailRider.assignedOrders.length})`
+                      : 'Assigned Order'}
+                  </SectionTitle>
+                  <div className="space-y-1.5">
+                    {detailRider.assignedOrders.map((o) => (
+                      <div
+                        key={o.id}
+                        className="flex items-center justify-between rounded-lg border border-line bg-canvas/40 px-3 py-2 text-xs"
+                      >
+                        <span className="font-mono font-semibold text-ink">
+                          {o.orderNumber || `#${o.id.slice(0, 8).toUpperCase()}`}
+                        </span>
+                        <span className="flex items-center gap-2 text-ink-soft">
+                          ₹{o.total}
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${
+                              o.status === 'out_for_delivery'
+                                ? 'bg-info-soft text-info'
+                                : 'bg-amber-100 text-amber-700'
+                            }`}
+                          >
+                            {o.status.replace(/_/g, ' ')}
+                          </span>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Contact */}
               <div className="space-y-3">
