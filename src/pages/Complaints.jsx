@@ -18,6 +18,8 @@ import Topbar, { TopIcons } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
 import { orderCode } from '../lib/format.js'
 import { boldLast4 } from '../components/OrderIdLabel.jsx'
+import { useOutletScope } from '../lib/outletScope.js'
+import OutletSwitcher from '../components/OutletSwitcher.jsx'
 
 // Visual styling per known complaint category. Unknown categories fall back to
 // a neutral style with a prettified label (see typeMetaFor below), so the page
@@ -92,22 +94,30 @@ export default function Complaints() {
   const [activeTab, setActiveTab] = useState('open') // 'open', 'resolved', 'all'
   const [selectedComplaintId, setSelectedComplaintId] = useState(null)
   const [toastMessage, setToastMessage] = useState(null)
+  // Complaints are scoped through the order they were raised against.
+  const { scopeId } = useOutletScope()
 
   // Load real complaints from the database, joined to the originating order
   // (for the receipt + rider) and the customer profile.
   const load = useCallback(() => {
-    return supabase
+    // A complaint belongs to whichever outlet cooked the order, so scoping it
+    // means an inner join on that order — `!inner` is what makes the filter
+    // drop the complaint rather than just blanking its order.
+    const orderJoin = scopeId ? 'order:orders!inner' : 'order:orders'
+    let q = supabase
       .from('complaints')
       .select(
         `id, order_id, customer_id, category, description, status, created_at,
          customer:profiles(full_name, phone),
-         order:orders(
-           id, order_number, total, delivery_address, delivery_fee, discount_amount, coupon_code,
+         ${orderJoin}(
+           id, order_number, total, restaurant_id, delivery_address, delivery_fee, discount_amount, coupon_code,
            order_items(quantity, price_at_order, products(name, photo_url)),
            rider:profiles!orders_rider_id_fkey(full_name, phone)
          )`
       )
       .order('created_at', { ascending: false })
+    if (scopeId) q = q.eq('order.restaurant_id', scopeId)
+    return q
       .then(({ data, error }) => {
         if (error) console.error('Failed to load complaints:', error.message)
         const list = (data ?? []).map((row) => {
@@ -142,7 +152,7 @@ export default function Complaints() {
         })
         setLoading(false)
       })
-  }, [])
+  }, [scopeId])
 
   useEffect(() => {
     load()
@@ -243,6 +253,7 @@ export default function Complaints() {
           </span>
         </div>
         <div className="flex items-center gap-2">
+          <OutletSwitcher />
           <TopIcons />
         </div>
       </Topbar>

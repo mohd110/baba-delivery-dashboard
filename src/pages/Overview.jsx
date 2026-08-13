@@ -18,6 +18,8 @@ import { boldLast4 } from '../components/OrderIdLabel.jsx'
 import DateRangeFilter from '../components/DateRangeFilter.jsx'
 import { inRange, rangeLabel } from '../lib/dateRange.js'
 import { exportToCsv } from '../lib/csv.js'
+import { useOutletScope } from '../lib/outletScope.js'
+import OutletSwitcher from '../components/OutletSwitcher.jsx'
 
 function dishImg(name = '') {
   const n = name.toLowerCase()
@@ -188,21 +190,27 @@ export default function Overview() {
   const [preset, setPreset] = useState('today')
   const [searchQuery, setSearchQuery] = useState('')
   const navigate = useNavigate()
+  // The overview covers the outlet in the topbar — all outlets for an admin
+  // who hasn't narrowed it, that outlet alone for everyone else.
+  const { scopeId, matches } = useOutletScope()
 
   const ordersRef = useRowMirror(orders)
 
   useEffect(() => {
     let alive = true
-    const load = () =>
-      supabase
+    const load = () => {
+      let q = supabase
         .from('orders')
         .select('*, order_items(quantity, products(name))')
         .order('created_at', { ascending: false })
+      if (scopeId) q = q.eq('restaurant_id', scopeId)
+      return q
         .then(({ data, error }) => {
           if (!alive) return
           if (error) console.error('Failed to load orders:', error.message)
           setOrders(data ?? [])
         })
+    }
 
     load()
     // Keep the overview live as orders arrive / change status — merging the
@@ -210,7 +218,7 @@ export default function Overview() {
     const channel = supabase
       .channel('overview-orders')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) =>
-        patchRowFromEvent(payload, { rowsRef: ordersRef, setRows: setOrders, reload: load })
+        patchRowFromEvent(payload, { rowsRef: ordersRef, setRows: setOrders, reload: load, matches })
       )
       .subscribe()
 
@@ -218,7 +226,7 @@ export default function Overview() {
       alive = false
       supabase.removeChannel(channel)
     }
-  }, [ordersRef])
+  }, [ordersRef, scopeId, matches])
 
   // KPIs respect the selected date range. Cancelled orders never earned money,
   // so keep them out of revenue figures.
@@ -300,6 +308,7 @@ export default function Overview() {
           onChange={setSearchQuery}
         />
         <div className="flex items-center gap-1">
+          <OutletSwitcher />
           <TopIcons />
           <Divider />
           <ProfileChip name="Wali Baba Foods" sub="Delivery Admin" />

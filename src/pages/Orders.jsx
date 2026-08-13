@@ -33,6 +33,9 @@ import OrderTimeline from '../components/OrderTimeline.jsx'
 import LiveMap from '../components/LiveMap.jsx'
 import MapModal from '../components/MapModal.jsx'
 import { useRestaurant, isAutoScheduleOn, setAutoScheduleOn } from '../lib/restaurant.js'
+import { useAuth } from '../lib/AuthContext.jsx'
+import { useOutletScope } from '../lib/outletScope.js'
+import OutletSwitcher from '../components/OutletSwitcher.jsx'
 import { useRiderLocation } from '../lib/riderLocation.js'
 import { gmapsLink, hasMapsKey, toCoords } from '../lib/googleMaps.js'
 
@@ -795,6 +798,24 @@ function PaymentBadge({ status }) {
 }
 
 export default function Orders() {
+  // Which of this page's controls the signed-in login is allowed to use. The
+  // database enforces the same three (add-staff-permissions.sql) — this just
+  // keeps a staffer from being shown a button that would only fail.
+  const { can } = useAuth()
+  const canToggleStore = can('action.restaurant_toggle')
+  const canAssignRider = can('action.assign_rider')
+  const canCancelOrder = can('action.cancel_order')
+
+  /* Which outlet's board this is: a staffer's own, or whichever the admin
+   * picked in the topbar (null = every outlet). Held in a ref as well, because
+   * `load` and the realtime handler below must stay referentially stable — see
+   * the note on the subscription effect. */
+  const { scopeId, matches } = useOutletScope()
+  const scopeRef = useRef(scopeId)
+  useEffect(() => { scopeRef.current = scopeId }, [scopeId])
+  const matchesRef = useRef(matches)
+  useEffect(() => { matchesRef.current = matches }, [matches])
+
   const [orders, setOrders] = useState([])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(null)
@@ -846,12 +867,13 @@ export default function Orders() {
   // leaves 'preparing'. Maintained in an effect — never mutated during render.
   const [lateSince, setLateSince] = useState(loadLateAnchors)
 
-  // Restaurant open/closed state (shared with Outlets + Settings).
+  // Restaurant open/closed state (shared with Outlets + Settings). Scoped: the
+  // switch acts on the outlet in the topbar, not on every branch at once.
   const {
     rows: outlets,
     loading: storeLoading, setOpen: setStoreOpen,
     closedReason, effectiveOpen, openTime: storeOpenTime,
-  } = useRestaurant()
+  } = useRestaurant(scopeId)
   const [storeBusy, setStoreBusy] = useState(false)
   // Close-reason picker (shown before switching the restaurant off).
   const [showCloseReason, setShowCloseReason] = useState(false)
@@ -860,7 +882,13 @@ export default function Orders() {
   const autoSchedule = isAutoScheduleOn()
 
   const toggleStore = async () => {
-    if (storeBusy || storeLoading) return
+    if (storeBusy || storeLoading || !canToggleStore) return
+    // On "All outlets" this switch moves every branch at once — worth asking,
+    // since the admin usually means the one they're looking at.
+    if (!scopeId && outlets.length > 1) {
+      const verb = effectiveOpen ? 'Close' : 'Open'
+      if (!confirm(`${verb} all ${outlets.length} outlets?\n\nPick a single outlet in the topbar to change just that one.`)) return
+    }
     if (effectiveOpen) {
       // Closing: collect a reason first so the customer app can show it.
       setCloseReasonChoice(CLOSE_REASONS[0])
@@ -913,12 +941,16 @@ export default function Orders() {
   // here, and several are optional-by-migration, so naming them would 400 on a
   // database that hasn't had every migration run.
   const load = useCallback(() => {
-    const base = () =>
-      supabase
+    const base = () => {
+      const q = supabase
         .from('orders')
         .select(
           '*, order_items(id, quantity, price_at_order, products(name, photo_url)), rider:profiles!orders_rider_id_fkey(full_name, phone)'
         )
+      // Scoped to one outlet server-side, so a staffer never downloads another
+      // branch's orders in the first place.
+      return scopeRef.current ? q.eq('restaurant_id', scopeRef.current) : q
+    }
     const newest = (q) => q.order('created_at', { ascending: false })
     // Exactly the set `activeOrders` keeps below. Spelled as an `or` rather
     // than a bare `not.in` because SQL's NOT IN is null-unsafe: a row with a
@@ -976,6 +1008,12 @@ export default function Orders() {
         //   - a row we don't currently hold
         //   - rider_id changed, so the `rider` join is wrong
         //   - the order finished, so it drops out of the server-side filter
+        // Realtime can't be filtered per-outlet on the server here (the channel
+        // is shared and the scope changes while it's open), so drop other
+        // outlets' events on arrival. A DELETE payload carries no row, so it
+        // falls through to the reload, which is scoped anyway.
+        const scoped = payload.new ?? payload.old
+        if (scoped && 'restaurant_id' in scoped && !matchesRef.current(scoped.restaurant_id)) return
         if (payload.eventType !== 'UPDATE') { load(); return }
         const row = payload.new
         const cur = row?.id ? ordersRef.current.find((o) => o.id === row.id) : null
@@ -995,8 +1033,18 @@ export default function Orders() {
     }
   }, [load])
 
-  // Rider roster for the reassign picker.
+  // Switching outlet refetches the board without touching the subscription
+  // above — `load` reads the scope from its ref, so it stays stable.
+  const scopeSeeded = useRef(true)
   useEffect(() => {
+    if (scopeSeeded.current) { scopeSeeded.current = false; return } // the mount load already ran
+    setSelectedOrderId(null)
+    load()
+  }, [scopeId, load])
+
+  // Rider roster for the reassign picker (not fetched when the picker is hidden).
+  useEffect(() => {
+    if (!canAssignRider) return
     supabase
       .from('profiles')
       .select('id, full_name, phone, vehicle_registration_number')
@@ -1013,7 +1061,7 @@ export default function Orders() {
         }
         setRiderRoster(data ?? [])
       })
-  }, [])
+  }, [canAssignRider])
 
   // Drive the live prep-time countdowns (re-render every second).
   //
@@ -1333,6 +1381,11 @@ export default function Orders() {
 
   useEffect(() => {
     if (pendingOverdueOrders.length === 0) return
+    // A login that isn't allowed to cancel orders can't auto-cancel them either
+    // — the database would reject the write. The auto-cancel then happens on the
+    // next dashboard that is allowed to, exactly as it already did whenever
+    // nobody had this page open.
+    if (!canCancelOrder) return
     pendingOverdueOrders.forEach(async (order) => {
       if (autoCancelledRef.current.has(order.id)) return
       autoCancelledRef.current.add(order.id)
@@ -1688,18 +1741,21 @@ export default function Orders() {
           </span>
         </div>
         <div className="flex items-center gap-2">
+          <OutletSwitcher />
           <button
             type="button"
             role="switch"
             aria-checked={effectiveOpen}
             onClick={toggleStore}
-            disabled={storeBusy || storeLoading}
+            disabled={storeBusy || storeLoading || !canToggleStore}
             title={
-              storeClosedHours
-                ? 'Auto-closed by schedule — click to open now (takes manual control)'
-                : autoSchedule
-                  ? 'Auto open/close is on — toggling here overrides the schedule'
-                  : 'Toggle whether the restaurant is accepting orders'
+              !canToggleStore
+                ? "You don't have permission to open or close the restaurant"
+                : storeClosedHours
+                  ? 'Auto-closed by schedule — click to open now (takes manual control)'
+                  : autoSchedule
+                    ? 'Auto open/close is on — toggling here overrides the schedule'
+                    : 'Toggle whether the restaurant is accepting orders'
             }
             className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors disabled:opacity-60 ${
               effectiveOpen
@@ -2257,7 +2313,7 @@ export default function Orders() {
                       <h3 className="text-xs font-bold uppercase tracking-wider text-ink-soft">
                         Assigned Rider
                       </h3>
-                      {CANCELABLE.has(selectedOrder.status) && (
+                      {CANCELABLE.has(selectedOrder.status) && canAssignRider && (
                         <button
                           type="button"
                           onClick={() => setReassignTarget(selectedOrder)}
@@ -2420,7 +2476,7 @@ export default function Orders() {
               {/* Bottom Sticky Action Footer */}
               <div className="sticky bottom-0 border-t border-line bg-white p-4 shadow-[0_-2px_10px_rgba(0,0,0,0.03)]">
                 <div className="flex items-center justify-end gap-3">
-                  {CANCELABLE.has(selectedOrder.status) && (
+                  {CANCELABLE.has(selectedOrder.status) && canCancelOrder && (
                     <button
                       type="button"
                       disabled={busy === selectedOrder.id}

@@ -19,7 +19,14 @@ import { useEffect, useRef } from 'react'
  *   - UPDATE of a row we don't hold: it has just entered this page's filter, so
  *     we need its joins fetched
  */
-export function patchRowFromEvent(payload, { rowsRef, setRows, reload }) {
+export function patchRowFromEvent(payload, { rowsRef, setRows, reload, matches }) {
+  // Multi-outlet: a page showing one outlet ignores every other outlet's
+  // events, so a busy branch can't trigger reloads on a dashboard watching a
+  // quiet one. Rows without a restaurant_id (non-order tables) always pass.
+  if (matches) {
+    const row = payload.new ?? payload.old
+    if (row && 'restaurant_id' in row && !matches(row.restaurant_id)) return
+  }
   if (payload.eventType !== 'UPDATE') { reload(); return }
   const row = payload.new
   if (!row?.id || !rowsRef.current.some((r) => r.id === row.id)) { reload(); return }

@@ -17,6 +17,8 @@ import {
 import Topbar, { TopIcons } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
 import { patchRowFromEvent, useRowMirror } from '../lib/realtimeRows.js'
+import { useOutletScope } from '../lib/outletScope.js'
+import OutletSwitcher from '../components/OutletSwitcher.jsx'
 import { orderCode } from '../lib/format.js'
 import { boldLast4 } from '../components/OrderIdLabel.jsx'
 import OrderTimeline from '../components/OrderTimeline.jsx'
@@ -52,6 +54,8 @@ export default function OrderHistory() {
   const [range, setRange] = useState(null)
   const [preset, setPreset] = useState('today')
   const [selectedOrderId, setSelectedOrderId] = useState(null)
+  // History is scoped to the outlet in the topbar (fixed, for staff).
+  const { scopeId, matches } = useOutletScope()
 
   const load = useCallback(async () => {
     // Rider join with the full vehicle/KYC detail. Those columns only exist
@@ -61,12 +65,14 @@ export default function OrderHistory() {
     const RIDER_FULL =
       'rider:profiles!orders_rider_id_fkey(full_name, phone, vehicle_type, vehicle_registration_number, vehicle_model, vehicle_color, insurance_active)'
     const RIDER_MIN = 'rider:profiles!orders_rider_id_fkey(full_name, phone)'
-    const query = (riderSel) =>
-      supabase
+    const query = (riderSel) => {
+      const q = supabase
         .from('orders')
         .select(`*, order_items(quantity, price_at_order, products(name, photo_url)), ${riderSel}`)
         .in('status', ['delivered', 'cancelled', ...IN_PROGRESS])
         .order('created_at', { ascending: false })
+      return scopeId ? q.eq('restaurant_id', scopeId) : q
+    }
 
     let { data, error } = await query(RIDER_FULL)
     if (error) {
@@ -76,7 +82,7 @@ export default function OrderHistory() {
     }
     setOrders(data ?? [])
     setLoading(false)
-  }, [])
+  }, [scopeId])
 
   const ordersRef = useRowMirror(orders)
 
@@ -87,11 +93,11 @@ export default function OrderHistory() {
     const channel = supabase
       .channel('order-history-realtime')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) =>
-        patchRowFromEvent(payload, { rowsRef: ordersRef, setRows: setOrders, reload: load })
+        patchRowFromEvent(payload, { rowsRef: ordersRef, setRows: setOrders, reload: load, matches })
       )
       .subscribe()
     return () => { supabase.removeChannel(channel) }
-  }, [load, ordersRef])
+  }, [load, ordersRef, matches])
 
   // Filter logic
   const filteredOrders = orders.filter((o) => {
@@ -154,6 +160,7 @@ export default function OrderHistory() {
           </span>
         </div>
         <div className="flex items-center gap-2">
+          <OutletSwitcher />
           <button
             onClick={handleExportCSV}
             className="flex items-center gap-2 rounded-lg bg-brand px-3 py-2 text-sm font-semibold text-white hover:bg-brand-dark transition-colors shadow-sm"

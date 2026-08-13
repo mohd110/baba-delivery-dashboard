@@ -12,6 +12,8 @@ import { patchRowFromEvent, useRowMirror } from '../lib/realtimeRows.js'
 import DateRangeFilter from '../components/DateRangeFilter.jsx'
 import { inRange, rangeLabel } from '../lib/dateRange.js'
 import { exportToCsv } from '../lib/csv.js'
+import { useOutletScope } from '../lib/outletScope.js'
+import OutletSwitcher from '../components/OutletSwitcher.jsx'
 
 /* ---------- animation hook: eases 0 → 1 on mount / data change ---------- */
 function useProgress(trigger) {
@@ -317,17 +319,22 @@ export default function Reports() {
   const [range, setRange] = useState(null)
   const [preset, setPreset] = useState('month')
 
+  // Reporting covers the outlet chosen in the topbar; an admin on "All outlets"
+  // still sees the whole business.
+  const { scopeId, matches, scopeLabel } = useOutletScope()
+
   const load = useCallback(() => {
-    return supabase
+    let q = supabase
       .from('orders')
       .select('id, total, status, payment_status, created_at, order_items(quantity, products(name))')
       .order('created_at', { ascending: false })
-      .then(({ data, error }) => {
-        if (error) console.error('Failed to load reports:', error.message)
-        setOrders(data ?? [])
-        setLoading(false)
-      })
-  }, [])
+    if (scopeId) q = q.eq('restaurant_id', scopeId)
+    return q.then(({ data, error }) => {
+      if (error) console.error('Failed to load reports:', error.message)
+      setOrders(data ?? [])
+      setLoading(false)
+    })
+  }, [scopeId])
 
   const ordersRef = useRowMirror(orders)
 
@@ -336,13 +343,13 @@ export default function Reports() {
     const channel = supabase
       .channel('reports-page')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) =>
-        patchRowFromEvent(payload, { rowsRef: ordersRef, setRows: setOrders, reload: load })
+        patchRowFromEvent(payload, { rowsRef: ordersRef, setRows: setOrders, reload: load, matches })
       )
       .subscribe()
     return () => {
       supabase.removeChannel(channel)
     }
-  }, [load, ordersRef])
+  }, [load, ordersRef, matches])
 
   // Everything except the rolling 14-day trend respects the selected range.
   const scoped = orders.filter((o) => inRange(o.created_at, range))
@@ -371,7 +378,14 @@ export default function Reports() {
       o.payment_status || '',
       o.total ?? 0,
     ])
-    exportToCsv(`reports-${preset}-${new Date().toISOString().slice(0, 10)}.csv`, headers, rows)
+    // Name the outlet in the file: a branch report and a whole-business report
+    // are easy to mix up once they're both sitting in Downloads.
+    const outletTag = scopeId ? `-${scopeLabel.toLowerCase().replace(/\s+/g, '-')}` : ''
+    exportToCsv(
+      `reports${outletTag}-${preset}-${new Date().toISOString().slice(0, 10)}.csv`,
+      headers,
+      rows
+    )
   }
 
   const label = rangeLabel(preset, range)
@@ -392,6 +406,7 @@ export default function Reports() {
           </span>
         </div>
         <div className="flex items-center gap-2">
+          <OutletSwitcher />
           <button
             onClick={handleExport}
             className="flex items-center gap-2 rounded-lg bg-brand px-3 py-2 text-sm font-semibold text-white hover:bg-brand-dark"

@@ -100,8 +100,18 @@ function subscribeShared(listener) {
 
 const getSnapshot = () => snapshot
 
-export function useRestaurant() {
-  const { rows, loading } = useSyncExternalStore(subscribeShared, getSnapshot)
+/**
+ * @param scopeId  which outlet this consumer is acting on. `null`/omitted keeps
+ *   the original chain-wide behaviour: hours come from the first outlet, the
+ *   store counts as open only when every outlet is, and the switch flips all of
+ *   them. Pass an id and everything below — status, hours, the toggle, the
+ *   schedule save — applies to that one outlet.
+ */
+export function useRestaurant(scopeId = null) {
+  const { rows: allRows, loading } = useSyncExternalStore(subscribeShared, getSnapshot)
+  // Everything downstream reads `rows`, so narrowing it here is all it takes.
+  // `rows` stays the full list for callers that render the roster (Outlets).
+  const rows = scopeId ? allRows.filter((r) => r.id === scopeId) : allRows
   const setRows = useCallback(
     (updater) => publish({ rows: updater(snapshot.rows), loading: snapshot.loading }),
     []
@@ -171,7 +181,7 @@ export function useRestaurant() {
   )
 
   return {
-    rows, loading, isOpen, openTime, closeTime, setOpen, saveSchedule, reload: load,
+    rows, allRows, loading, isOpen, openTime, closeTime, setOpen, saveSchedule, reload: load,
     now, closedReason, effectiveOpen, closedReasonText,
   }
 }

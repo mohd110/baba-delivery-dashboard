@@ -7,6 +7,8 @@ import {
   setAutoScheduleOn,
   isWithinOpenHours,
 } from '../lib/restaurant.js'
+import { useOutletScope } from '../lib/outletScope.js'
+import OutletSwitcher from '../components/OutletSwitcher.jsx'
 
 // "HH:MM:SS" -> "HH:MM" for a time input; "HH:MM" -> "HH:MM:00" for the DB.
 const toInput = (t) => (t ? String(t).slice(0, 5) : '')
@@ -39,22 +41,27 @@ function Toggle({ on, onChange }) {
 }
 
 export default function Settings() {
-  const { loading, openTime, closeTime, saveSchedule } = useRestaurant()
+  /* Hours belong to an outlet, not to the business: each branch keeps its own,
+   * so this edits whichever one the topbar is on (fixed, for staff). */
+  const { scopeId, scopeLabel, outlets } = useOutletScope()
+  const { loading, openTime, closeTime, saveSchedule } = useRestaurant(scopeId)
   const [openVal, setOpenVal] = useState('')
   const [closeVal, setCloseVal] = useState('')
   const [auto, setAuto] = useState(isAutoScheduleOn())
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
-  const seeded = useRef(false)
+  const seeded = useRef(null)
 
-  // Seed the inputs from the saved schedule once it has loaded.
+  // Seed the inputs from the saved schedule once it has loaded — and re-seed
+  // when the outlet changes, or the form would keep showing the last one's.
   useEffect(() => {
-    if (!loading && !seeded.current) {
+    if (!loading && seeded.current !== scopeId) {
       setOpenVal(toInput(openTime))
       setCloseVal(toInput(closeTime))
-      seeded.current = true
+      setSaved(false)
+      seeded.current = scopeId
     }
-  }, [loading, openTime, closeTime])
+  }, [loading, openTime, closeTime, scopeId])
 
   const save = async () => {
     setSaving(true)
@@ -77,7 +84,10 @@ export default function Settings() {
     <>
       <Topbar>
         <h1 className="text-xl font-bold text-ink">Settings & Permissions</h1>
-        <TopIcons />
+        <div className="flex items-center gap-2">
+          <OutletSwitcher />
+          <TopIcons />
+        </div>
       </Topbar>
 
       <div className="max-w-2xl space-y-6 p-8">
@@ -89,7 +99,13 @@ export default function Settings() {
             </span>
             <div>
               <h2 className="text-base font-bold text-ink">Business Hours</h2>
-              <p className="text-xs text-ink-soft">Set when the restaurant accepts orders.</p>
+              <p className="text-xs text-ink-soft">
+                {outlets.length > 1
+                  ? scopeId
+                    ? `When ${scopeLabel} accepts orders.`
+                    : 'Applies to every outlet — pick one in the topbar to set its own hours.'
+                  : 'Set when the restaurant accepts orders.'}
+              </p>
             </div>
           </div>
 

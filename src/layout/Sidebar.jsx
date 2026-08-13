@@ -1,23 +1,10 @@
 import { NavLink } from 'react-router-dom'
 import { useState, useEffect } from 'react'
-import {
-  ShoppingBag,
-  History,
-  BarChart3,
-  AlertTriangle,
-  LayoutGrid,
-  Store,
-  BookOpen,
-  Bike,
-  Users,
-  Image as ImageIcon,
-  Settings as SettingsIcon,
-  LogOut,
-  ChevronDown,
-  ChevronUp,
-} from 'lucide-react'
+import { LogOut, ChevronDown, ChevronUp, ShieldCheck } from 'lucide-react'
 import { useAuth } from '../lib/AuthContext.jsx'
 import { supabase } from '../lib/supabase.js'
+import { NAV_MAIN, NAV_ADMIN } from '../lib/permissions.js'
+import { useOutletScope } from '../lib/outletScope.js'
 
 function NavItem({ to, label, icon: Icon, badge }) {
   return (
@@ -44,31 +31,73 @@ function NavItem({ to, label, icon: Icon, badge }) {
   )
 }
 
+function AdminNavItem({ to, label, icon: Icon }) {
+  return (
+    <NavLink
+      to={to}
+      className={({ isActive }) =>
+        `flex items-center gap-3 rounded-lg px-3 py-2 text-xs transition-colors ${
+          isActive ? 'bg-line-soft font-semibold text-brand' : 'text-ink-soft hover:bg-line-soft hover:text-ink'
+        }`
+      }
+    >
+      <Icon className="h-3.5 w-3.5" /> {label}
+    </NavLink>
+  )
+}
+
 export default function Sidebar() {
-  const { user, signOut } = useAuth()
+  const { user, signOut, can, isAdmin } = useAuth()
+  // Badges count the outlet you're looking at, not the whole chain.
+  const { scopeId, scopeLabel, outlets } = useOutletScope()
   const [activeCount, setActiveCount] = useState(0)
   const [complaintCount, setComplaintCount] = useState(0)
   const [showAdmin, setShowAdmin] = useState(false)
   const email = user?.email ?? ''
   const name = user?.user_metadata?.full_name || email.split('@')[0] || 'Restaurant Admin'
 
-  const fetchCounts = async () => {
-    // Active orders count: status not delivered/cancelled
-    const { count: ordCount, error: ordErr } = await supabase
-      .from('orders')
-      .select('id', { count: 'exact', head: true })
-      .not('status', 'in', '("delivered","cancelled")')
-    if (!ordErr) setActiveCount(ordCount ?? 0)
-
-    // Active complaints: rows in the complaints table that aren't resolved/closed.
-    const { count: compCount, error: compErr } = await supabase
-      .from('complaints')
-      .select('id', { count: 'exact', head: true })
-      .not('status', 'in', '("resolved","closed","cancelled")')
-    if (!compErr) setComplaintCount(compCount ?? 0)
-  }
+  /* Both blocks are driven by the permission registry, so a login only ever
+   * sees links to pages it can actually open. */
+  const mainNav = NAV_MAIN.filter((item) => can(item.key))
+  const adminNav = NAV_ADMIN.filter((item) => can(item.key))
+  // Badge counts belong to specific links — don't query for a link that's hidden.
+  const showOrderBadge = can('page.orders')
+  const showComplaintBadge = can('page.complaints')
 
   useEffect(() => {
+    const fetchCounts = async () => {
+      // Active orders count: status not delivered/cancelled
+      if (showOrderBadge) {
+        let q = supabase
+          .from('orders')
+          .select('id', { count: 'exact', head: true })
+          .not('status', 'in', '("delivered","cancelled")')
+        if (scopeId) q = q.eq('restaurant_id', scopeId)
+        const { count: ordCount, error: ordErr } = await q
+        if (!ordErr) setActiveCount(ordCount ?? 0)
+      }
+
+      // Active complaints: rows in the complaints table that aren't resolved/closed.
+      // Scoped through the order they were raised against.
+      if (showComplaintBadge) {
+        let q = supabase
+          .from('complaints')
+          .select(scopeId ? 'id, orders!inner(restaurant_id)' : 'id', { count: 'exact', head: true })
+          .not('status', 'in', '("resolved","closed","cancelled")')
+        if (scopeId) q = q.eq('orders.restaurant_id', scopeId)
+        let { count: compCount, error: compErr } = await q
+        if (compErr && scopeId) {
+          // No usable orders relation — fall back to the chain-wide count
+          // rather than showing no badge at all.
+          ;({ count: compCount, error: compErr } = await supabase
+            .from('complaints')
+            .select('id', { count: 'exact', head: true })
+            .not('status', 'in', '("resolved","closed","cancelled")'))
+        }
+        if (!compErr) setComplaintCount(compCount ?? 0)
+      }
+    }
+
     fetchCounts()
     // Subscribe to order updates to refresh badges in real-time
     const channel = supabase
@@ -79,7 +108,13 @@ export default function Sidebar() {
     return () => {
       supabase.removeChannel(channel)
     }
-  }, [])
+  }, [showOrderBadge, showComplaintBadge, scopeId])
+
+  const badgeFor = (key) => {
+    if (key === 'page.orders') return activeCount
+    if (key === 'page.complaints') return complaintCount
+    return 0
+  }
 
   return (
     <aside className="flex h-full w-[260px] shrink-0 flex-col justify-between border-r border-line bg-white py-6 shadow-[1px_0_1px_rgba(0,0,0,0.05)]">
@@ -109,88 +144,37 @@ export default function Sidebar() {
       {/* Nav */}
       <nav className="flex flex-1 flex-col items-center gap-1 overflow-y-auto px-2 pt-1">
         <div className="space-y-1">
-          <NavItem to="/orders" label="Active Orders" icon={ShoppingBag} badge={activeCount} />
-          <NavItem to="/order-history" label="Order History" icon={History} />
-          <NavItem to="/menu" label="Menu" icon={BookOpen} />
-          <NavItem to="/reports" label="Reporting" icon={BarChart3} />
-          <NavItem to="/complaints" label="Customer Complaints" icon={AlertTriangle} badge={complaintCount} />
+          {mainNav.map((item) => (
+            <NavItem
+              key={item.key}
+              to={item.path}
+              label={item.label}
+              icon={item.icon}
+              badge={badgeFor(item.key)}
+            />
+          ))}
         </div>
 
         {/* Collapsible Administrative Section */}
-        <div className="mt-4 w-[243px] border-t border-line pt-4">
-          <button
-            onClick={() => setShowAdmin(!showAdmin)}
-            className="flex w-full items-center justify-between px-3 py-2 text-xs font-semibold uppercase tracking-wider text-ink-soft hover:text-ink transition-colors"
-          >
-            <span>Administration</span>
-            {showAdmin ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3.5 w-3.5" />}
-          </button>
+        {adminNav.length > 0 && (
+          <div className="mt-4 w-[243px] border-t border-line pt-4">
+            <button
+              onClick={() => setShowAdmin(!showAdmin)}
+              className="flex w-full items-center justify-between px-3 py-2 text-xs font-semibold uppercase tracking-wider text-ink-soft hover:text-ink transition-colors"
+            >
+              <span>Administration</span>
+              {showAdmin ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3.5 w-3.5" />}
+            </button>
 
-          {showAdmin && (
-            <div className="mt-2 space-y-1 pl-1 transition-all duration-300">
-              <NavLink
-                to="/dashboard"
-                className={({ isActive }) =>
-                  `flex items-center gap-3 rounded-lg px-3 py-2 text-xs transition-colors ${
-                    isActive ? 'bg-line-soft font-semibold text-brand' : 'text-ink-soft hover:bg-line-soft hover:text-ink'
-                  }`
-                }
-              >
-                <LayoutGrid className="h-3.5 w-3.5" /> Overview
-              </NavLink>
-              <NavLink
-                to="/outlets"
-                className={({ isActive }) =>
-                  `flex items-center gap-3 rounded-lg px-3 py-2 text-xs transition-colors ${
-                    isActive ? 'bg-line-soft font-semibold text-brand' : 'text-ink-soft hover:bg-line-soft hover:text-ink'
-                  }`
-                }
-              >
-                <Store className="h-3.5 w-3.5" /> Outlets
-              </NavLink>
-              <NavLink
-                to="/riders"
-                className={({ isActive }) =>
-                  `flex items-center gap-3 rounded-lg px-3 py-2 text-xs transition-colors ${
-                    isActive ? 'bg-line-soft font-semibold text-brand' : 'text-ink-soft hover:bg-line-soft hover:text-ink'
-                  }`
-                }
-              >
-                <Bike className="h-3.5 w-3.5" /> Riders
-              </NavLink>
-              <NavLink
-                to="/customers"
-                className={({ isActive }) =>
-                  `flex items-center gap-3 rounded-lg px-3 py-2 text-xs transition-colors ${
-                    isActive ? 'bg-line-soft font-semibold text-brand' : 'text-ink-soft hover:bg-line-soft hover:text-ink'
-                  }`
-                }
-              >
-                <Users className="h-3.5 w-3.5" /> Customers
-              </NavLink>
-              <NavLink
-                to="/banners"
-                className={({ isActive }) =>
-                  `flex items-center gap-3 rounded-lg px-3 py-2 text-xs transition-colors ${
-                    isActive ? 'bg-line-soft font-semibold text-brand' : 'text-ink-soft hover:bg-line-soft hover:text-ink'
-                  }`
-                }
-              >
-                <ImageIcon className="h-3.5 w-3.5" /> Hero Slideshow
-              </NavLink>
-              <NavLink
-                to="/settings"
-                className={({ isActive }) =>
-                  `flex items-center gap-3 rounded-lg px-3 py-2 text-xs transition-colors ${
-                    isActive ? 'bg-line-soft font-semibold text-brand' : 'text-ink-soft hover:bg-line-soft hover:text-ink'
-                  }`
-                }
-              >
-                <SettingsIcon className="h-3.5 w-3.5" /> Settings
-              </NavLink>
-            </div>
-          )}
-        </div>
+            {showAdmin && (
+              <div className="mt-2 space-y-1 pl-1 transition-all duration-300">
+                {adminNav.map((item) => (
+                  <AdminNavItem key={item.key} to={item.path} label={item.label} icon={item.icon} />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </nav>
 
       {/* Profile */}
@@ -204,14 +188,27 @@ export default function Sidebar() {
           <div className="flex flex-col overflow-hidden">
             <p className="truncate text-sm font-bold text-ink">{name}</p>
             <p className="truncate text-xs text-ink-soft">{email}</p>
+            <span className="mt-0.5 w-fit rounded-full bg-white px-1.5 py-px text-[9px] font-bold uppercase tracking-wide text-ink-soft">
+              {isAdmin ? 'Owner · Admin' : 'Staff'}
+              {outlets.length > 1 && ` · ${scopeLabel}`}
+            </span>
           </div>
-          <button
-            onClick={signOut}
-            title="Sign out"
-            className="ml-auto shrink-0 text-ink-soft hover:text-brand"
-          >
-            <LogOut className="h-4 w-4" />
-          </button>
+          <div className="ml-auto flex shrink-0 flex-col items-center gap-2">
+            <button
+              onClick={signOut}
+              title="Sign out"
+              className="text-ink-soft hover:text-brand"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
+            {/* Straight to user management from the profile card — the owner
+                manages staff logins far more often than anything else here. */}
+            {can('page.staff') && (
+              <NavLink to="/staff" title="Users & permissions" className="text-ink-soft hover:text-brand">
+                <ShieldCheck className="h-4 w-4" />
+              </NavLink>
+            )}
+          </div>
         </div>
       </div>
     </aside>

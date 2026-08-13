@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { BellRing } from 'lucide-react'
 import { supabase } from '../lib/supabase.js'
 import { orderCode } from '../lib/format.js'
+import { useOutletScope } from '../lib/outletScope.js'
 import { boldLast4 } from './OrderIdLabel.jsx'
 
 let toastSeq = 0
@@ -48,6 +49,18 @@ export default function OrderNotifications() {
   const [toasts, setToasts] = useState([])
   const navigate = useNavigate()
 
+  /* Who gets alerted for what: a staffer only hears their own outlet's orders,
+   * while an admin on "All outlets" hears every branch — which is the point of
+   * the super-admin view. Held in a ref so switching outlet doesn't tear down
+   * the subscription (and miss an order in the gap). */
+  const { matches, outlets } = useOutletScope()
+  const matchesRef = useRef(matches)
+  useEffect(() => { matchesRef.current = matches }, [matches])
+  // Which branch an order came from, resolved at render time — only worth
+  // naming once there is more than one outlet.
+  const outletLabel = (id) =>
+    outlets.length > 1 ? outlets.find((o) => o.id === id)?.label ?? null : null
+
   useEffect(() => {
     // Drop every toast for an order that is no longer awaiting acceptance,
     // silencing the alarm once the last one clears.
@@ -67,8 +80,10 @@ export default function OrderNotifications() {
         { event: 'INSERT', schema: 'public', table: 'orders' },
         (payload) => {
           const o = payload.new || {}
-          // Only alert for orders still awaiting acceptance.
+          // Only alert for orders still awaiting acceptance…
           if (o.status && o.status !== 'pending') return
+          // …at an outlet this login is watching.
+          if (!matchesRef.current(o.restaurant_id)) return
           const addr = o.delivery_address || {}
           const id = ++toastSeq
           const toast = {
@@ -77,6 +92,7 @@ export default function OrderNotifications() {
             code: orderCode(o),
             total: typeof o.total === 'number' ? o.total : null,
             name: addr.name || 'New customer',
+            outletId: o.restaurant_id || null,
           }
           setToasts((list) => [toast, ...list].slice(0, 4))
           startAlarm()
@@ -123,7 +139,14 @@ export default function OrderNotifications() {
             <BellRing className="h-4 w-4" />
           </span>
           <div className="min-w-0 flex-1">
-            <p className="text-sm font-bold text-ink">New order received</p>
+            <p className="flex items-center gap-1.5 text-sm font-bold text-ink">
+              New order received
+              {outletLabel(t.outletId) && (
+                <span className="rounded-full bg-line-soft px-1.5 py-px text-[10px] font-bold uppercase tracking-wide text-ink-soft">
+                  {outletLabel(t.outletId)}
+                </span>
+              )}
+            </p>
             <p className="mt-0.5 truncate text-xs text-ink-soft">
               {boldLast4(t.code)}
               {t.total != null ? ` · ₹${t.total.toLocaleString('en-IN')}` : ''} · {t.name}
