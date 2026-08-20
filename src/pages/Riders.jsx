@@ -612,7 +612,7 @@ export default function Riders() {
     () =>
       supabase
         .from('orders')
-        .select('id, order_number, status, total, rider_payment, created_at, rider_id, rider:profiles!orders_rider_id_fkey(id, full_name, phone)')
+        .select('id, order_number, status, total, rider_payment, created_at, delivered_at, rider_id, rider:profiles!orders_rider_id_fkey(id, full_name, phone)')
         .not('rider_id', 'is', null)
         .order('created_at', { ascending: false }),
     []
@@ -818,7 +818,17 @@ export default function Riders() {
     load()
   }
 
-  const riders = buildRiders(ordersData.filter((o) => inRange(o.created_at, range)), roster, locs)
+  /* Bucketed by DELIVERY date, not order date — a rider earns when they hand
+   * the food over. The rider app's own totals come from get_my_earnings_summary
+   * (rider app migration 009), which filters on `delivered_at`; matching that
+   * here is what stops an order placed 23:50 and delivered 00:15 from being
+   * counted on different days by the two apps. In-flight orders have no
+   * delivered_at yet, so they fall back to when they were placed. */
+  const riders = buildRiders(
+    ordersData.filter((o) => inRange(o.delivered_at || o.created_at, range)),
+    roster,
+    locs
+  )
   const q = searchQuery.trim().toLowerCase()
   const visibleRiders = q
     ? riders.filter((r) => {
@@ -1112,7 +1122,11 @@ export default function Riders() {
                 </div>
                 <div>
                   <p className="text-lg font-bold text-ink">₹{detailRider.earned.toLocaleString('en-IN')}</p>
-                  <p className="text-[10px] font-semibold uppercase text-ink-soft">Earned</p>
+                  {/* Gross pay for deliveries in this range — the same figure the
+                      rider app calls "total earnings". It is NOT the app's wallet
+                      balance, which nets out settled payouts and is therefore
+                      smaller once a payout batch is marked paid. */}
+                  <p className="text-[10px] font-semibold uppercase text-ink-soft" title="Gross delivery pay for the selected range. The rider app's wallet balance excludes amounts already paid out, so it can be lower.">Total earned</p>
                 </div>
                 <div>
                   <p className="text-lg font-bold text-ink">{ago(detailRider.lastAt)}</p>
