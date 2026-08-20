@@ -65,6 +65,45 @@ from the API also needs a guard in `add-staff-permissions.sql` — the ones for
 opening/closing the restaurant, re-assigning riders, cancelling orders and
 granting permissions are already there.
 
+## Offers & coupons
+
+Run `add-coupons.sql` once in the Supabase SQL editor, then use **Offers &
+Coupons** (sidebar → Administration). It is the same `coupons` table the
+customer app reads at checkout, so an offer saved here is live immediately —
+no deploy, no cache to clear.
+
+An offer is either **flat** (a fixed number of rupees off) or **percentage**
+(a percentage with a compulsory maximum), never both — the `coupons_shape_check`
+constraint rejects anything in between, and the form checks the same rules
+first so you get a readable message rather than a raw Postgres error.
+
+* Every minimum is the **food subtotal**. The delivery fee is never discounted
+  and never counts towards the minimum.
+* **Only one coupon applies per order.** Offers do not stack.
+* **List position** (`sort_order`) is not cosmetic: it is the order customers
+  see, and the lowest-numbered offer their cart qualifies for is the one already
+  applied when they reach checkout. The row carrying it is badged *Applied
+  first*. Use the up/down arrows to change which that is.
+* **Switch off** is the fastest lever for an offer that is costing too much —
+  it hides the code from every customer instantly and keeps its usage history.
+  Deleting the row loses that history; the orders that used it keep their code
+  and their discount either way.
+* Usage is read straight off `orders.coupon_code`; there is no separate ledger.
+  Cancelled orders still count as a redemption (they consume a one-time code in
+  the customer app too) but not as rupees given away.
+
+Offers are **chain-wide** — `coupons` carries no `restaurant_id`, so a code
+works at every outlet and this page ignores the outlet switcher, the same call
+the shared menu makes.
+
+Writes are gated on the `page.offers` permission in the database as well as in
+the UI, so a staff login without it cannot create itself a coupon from the API.
+If the customer app's `025_once_per_customer_coupons.sql` blanket policy is
+still in place it OR's with that gate — `add-coupons.sql` says how to check.
+
+There are no expiry dates and no "first 100 customers" cap: offers run until
+someone switches them off.
+
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
 Currently, two official plugins are available:

@@ -11,6 +11,7 @@ import {
   Image as ImageIcon,
   Settings as SettingsIcon,
   Truck,
+  TicketPercent,
   ShieldCheck,
   DoorOpen,
   UserCog,
@@ -50,6 +51,7 @@ const PAGES = [
   { key: 'page.riders',        label: 'Riders',              path: '/riders',        icon: Bike,          nav: 'admin', group: 'Riders', hint: 'The rider roster, KYC details and rider earnings.' },
   { key: 'page.customers',     label: 'Customers',           path: '/customers',     icon: Users,         nav: 'admin', group: 'Customers', hint: 'Customer list, addresses and order counts.' },
   { key: 'page.banners',       label: 'Hero Slideshow',      path: '/banners',       icon: ImageIcon,     nav: 'admin', group: 'Catalogue', hint: 'The promotional banners on the customer app home screen.' },
+  { key: 'page.offers',        label: 'Offers & Coupons',    path: '/offers',        icon: TicketPercent, nav: 'admin', group: 'Business', hint: 'Discount codes customers apply at checkout, and what each one has cost.' },
   { key: 'page.delivery_fees', label: 'Delivery Fees',       path: '/delivery-fees', icon: Truck,         nav: null,    group: 'Catalogue', hint: 'Distance-based delivery charges.' },
   { key: 'page.settings',      label: 'Settings',            path: '/settings',      icon: SettingsIcon,  nav: 'admin', group: 'Admin', hint: 'Business hours and the auto open/close schedule.' },
   {

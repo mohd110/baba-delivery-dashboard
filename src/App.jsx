@@ -14,6 +14,7 @@ import Customers from './pages/Customers.jsx'
 import Outlets from './pages/Outlets.jsx'
 import DeliveryFees from './pages/DeliveryFees.jsx'
 import Banners from './pages/Banners.jsx'
+import Offers from './pages/Offers.jsx'
 import Reports from './pages/Reports.jsx'
 import Settings from './pages/Settings.jsx'
 import Staff from './pages/Staff.jsx'
@@ -99,6 +100,7 @@ export default function App() {
             <Route path="/outlets" element={<RequirePerm perm="page.outlets"><Outlets /></RequirePerm>} />
             <Route path="/delivery-fees" element={<RequirePerm perm="page.delivery_fees"><DeliveryFees /></RequirePerm>} />
             <Route path="/banners" element={<RequirePerm perm="page.banners"><Banners /></RequirePerm>} />
+            <Route path="/offers" element={<RequirePerm perm="page.offers"><Offers /></RequirePerm>} />
             <Route path="/reports" element={<RequirePerm perm="page.reports"><Reports /></RequirePerm>} />
             <Route path="/settings" element={<RequirePerm perm="page.settings"><Settings /></RequirePerm>} />
             <Route path="/staff" element={<RequirePerm perm="page.staff"><Staff /></RequirePerm>} />
