@@ -25,6 +25,7 @@ import { compressImage } from '../lib/compressImage.js'
 import DateRangeFilter from '../components/DateRangeFilter.jsx'
 import LiveMap from '../components/LiveMap.jsx'
 import MapModal from '../components/MapModal.jsx'
+import OutletTag from '../components/OutletTag.jsx'
 import { inRange, rangeLabel } from '../lib/dateRange.js'
 import { gmapsLink, hasMapsKey, toCoords } from '../lib/googleMaps.js'
 
@@ -555,7 +556,14 @@ function buildRiders(orders, roster, locs) {
       // the road, and undercounting that here was hiding real multi-order
       // load from staff.
       r.active += 1
-      r.assignedOrders.push({ id: o.id, orderNumber: o.order_number, status: o.status, total: o.total })
+      r.assignedOrders.push({
+        id: o.id,
+        orderNumber: o.order_number,
+        status: o.status,
+        total: o.total,
+        // A rider can be carrying orders from two branches at once.
+        restaurantId: o.restaurant_id ?? null,
+      })
       if (o.status === 'out_for_delivery') r.outForDelivery += 1
     }
     if (!r.lastAt || new Date(o.created_at) > new Date(r.lastAt)) r.lastAt = o.created_at
@@ -612,7 +620,7 @@ export default function Riders() {
     () =>
       supabase
         .from('orders')
-        .select('id, order_number, status, total, rider_payment, created_at, delivered_at, rider_id, rider:profiles!orders_rider_id_fkey(id, full_name, phone)')
+        .select('id, order_number, status, total, rider_payment, created_at, delivered_at, rider_id, restaurant_id, rider:profiles!orders_rider_id_fkey(id, full_name, phone)')
         .not('rider_id', 'is', null)
         .order('created_at', { ascending: false }),
     []
@@ -1151,8 +1159,11 @@ export default function Riders() {
                         key={o.id}
                         className="flex items-center justify-between rounded-lg border border-line bg-canvas/40 px-3 py-2 text-xs"
                       >
-                        <span className="font-mono font-semibold text-ink">
-                          {o.orderNumber || `#${o.id.slice(0, 8).toUpperCase()}`}
+                        <span className="flex min-w-0 items-center gap-1.5">
+                          <span className="font-mono font-semibold text-ink">
+                            {o.orderNumber || `#${o.id.slice(0, 8).toUpperCase()}`}
+                          </span>
+                          <OutletTag restaurantId={o.restaurantId} />
                         </span>
                         <span className="flex items-center gap-2 text-ink-soft">
                           ₹{o.total}

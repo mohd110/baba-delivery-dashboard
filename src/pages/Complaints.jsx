@@ -20,6 +20,7 @@ import { orderCode } from '../lib/format.js'
 import { boldLast4 } from '../components/OrderIdLabel.jsx'
 import { useOutletScope } from '../lib/outletScope.js'
 import OutletSwitcher from '../components/OutletSwitcher.jsx'
+import OutletTag from '../components/OutletTag.jsx'
 
 // Visual styling per known complaint category. Unknown categories fall back to
 // a neutral style with a prettified label (see typeMetaFor below), so the page
@@ -136,6 +137,9 @@ export default function Complaints() {
             status: normStatus(row.status),
             category: row.category,
             description: row.description || 'No description provided.',
+            // The branch that cooked the order the complaint is about — the
+            // query already asks for it so an admin can be told which kitchen.
+            restaurantId: order.restaurant_id ?? null,
             orderTotal: typeof order.total === 'number' ? order.total : null,
             items: order.order_items || [],
             rider: order.rider || null,
@@ -352,8 +356,11 @@ export default function Complaints() {
                           {c.description}
                         </p>
                       </div>
-                      <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-line-soft text-ink-soft">
-                        {boldLast4(c.orderShortId)}
+                      <span className="flex shrink-0 flex-col items-end gap-1">
+                        <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-line-soft text-ink-soft">
+                          {boldLast4(c.orderShortId)}
+                        </span>
+                        <OutletTag restaurantId={c.restaurantId} />
                       </span>
                     </div>
 
@@ -382,8 +389,9 @@ export default function Complaints() {
                 <div className="flex justify-between items-start">
                   <div>
                     <div className="flex items-center gap-3">
-                      <h2 className="text-lg font-bold text-ink">
+                      <h2 className="flex items-center gap-2 text-lg font-bold text-ink">
                         Complaint Report: {selectedComplaint.code}
+                        <OutletTag restaurantId={selectedComplaint.restaurantId} size="sm" />
                       </h2>
                       <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-bold ${statusBadgeClass(selectedComplaint.status)}`}>
                         {STATUS_LABEL[selectedComplaint.status]}

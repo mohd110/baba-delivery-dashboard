@@ -20,10 +20,13 @@
 --                           all filtered to it, and the open/closed switch acts
 --                           on their outlet alone.
 --
--- The menu is deliberately NOT scoped: `products` carries no restaurant_id (see
--- the customer app's 022_multi_outlet.sql), so every outlet serves the same
--- dishes at the same prices. Per-outlet menus are a schema change, not a
--- setting — the customer app's handoff says the same.
+-- The menu itself is deliberately NOT scoped: `products` carries no
+-- restaurant_id (see the customer app's 022_multi_outlet.sql), so every outlet
+-- serves the same dishes at the same prices. What an outlet DOES control on its
+-- own is whether a dish is being served right now — that came later, in
+-- add-outlet-menu-availability.sql, as an override table rather than a
+-- restaurant_id on products. Separate per-outlet dish lists and per-outlet
+-- prices remain a schema change, not a setting.
 
 -- ---------------------------------------------------------------------------
 -- 1. Which outlet a login belongs to

@@ -36,6 +36,7 @@ import { useRestaurant, isAutoScheduleOn, setAutoScheduleOn } from '../lib/resta
 import { useAuth } from '../lib/AuthContext.jsx'
 import { useOutletScope } from '../lib/outletScope.js'
 import OutletSwitcher from '../components/OutletSwitcher.jsx'
+import OutletTag from '../components/OutletTag.jsx'
 import { useRiderLocation } from '../lib/riderLocation.js'
 import { gmapsLink, hasMapsKey, toCoords } from '../lib/googleMaps.js'
 
@@ -2000,6 +2001,9 @@ export default function Orders() {
 
                     <div className="mt-1 flex items-center justify-between gap-2">
                       <div className="flex flex-wrap items-center gap-1">
+                        {/* Which branch is cooking it — admins only, and only
+                            when there's more than one branch to confuse. */}
+                        <OutletTag restaurantId={o.restaurant_id} />
                         <span className="rounded bg-line-soft px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-ink-soft">
                           {o.order_type || 'delivery'}
                         </span>
@@ -2066,6 +2070,7 @@ export default function Orders() {
                         Order <OrderIdLabel order={selectedOrder} />
                       </h2>
                       <StatusBadge status={selectedOrder.status} />
+                      <OutletTag restaurantId={selectedOrder.restaurant_id} size="sm" />
                       {isCod(selectedOrder) && (
                         <span className="inline-flex items-center gap-1 rounded-full bg-orange-50 px-2.5 py-0.5 text-xs font-semibold text-orange-700">
                           💵 Cash on Delivery — collect ₹{selectedOrder.total} on delivery
@@ -2580,8 +2585,9 @@ export default function Orders() {
                 </span>
                 <div>
                   <h3 className="text-base font-bold text-ink">Change delivery rider</h3>
-                  <p className="text-xs text-ink-soft">
-                    Order <OrderIdLabel order={reassignTarget} /> · pick who delivers it
+                  <p className="flex items-center gap-1.5 text-xs text-ink-soft">
+                    <span>Order <OrderIdLabel order={reassignTarget} /> · pick who delivers it</span>
+                    <OutletTag restaurantId={reassignTarget.restaurant_id} />
                   </p>
                 </div>
               </div>
@@ -2680,7 +2686,13 @@ export default function Orders() {
                   <Clock className="h-6 w-6" />
                 </span>
                 <div>
-                  <h3 className="text-lg font-bold text-brand">Time&apos;s up!</h3>
+                  <h3 className="flex items-center gap-2 text-lg font-bold text-brand">
+                    Time&apos;s up!
+                    {/* This popup fires over whatever the admin was doing, for
+                        an order that may not even be on screen — so it has to
+                        say which kitchen is behind. */}
+                    <OutletTag restaurantId={alarmOrder.restaurant_id} />
+                  </h3>
                   <p className="text-xs font-semibold text-ink-soft">
                     Order <OrderIdLabel order={alarmOrder} /> is overdue by{' '}
                     {fmtCountdown(lateAnchorOf(alarmOrder) - nowTs).replace('+', '')}
@@ -2749,8 +2761,9 @@ export default function Orders() {
                   <Clock className="h-5 w-5" />
                 </span>
                 <div>
-                  <h3 className="text-base font-bold text-ink">
+                  <h3 className="flex items-center gap-2 text-base font-bold text-ink">
                     Accept order {orderCode(acceptTarget)}
+                    <OutletTag restaurantId={acceptTarget.restaurant_id} />
                   </h3>
                   <p className="text-xs text-ink-soft">How long until it&apos;s ready? The customer sees this as their ETA.</p>
                 </div>
@@ -2839,8 +2852,9 @@ export default function Orders() {
                   <Ban className="h-5 w-5" />
                 </span>
                 <div>
-                  <h3 className="text-base font-bold text-ink">
+                  <h3 className="flex items-center gap-2 text-base font-bold text-ink">
                     Cancel order {orderCode(cancelTarget)}
+                    <OutletTag restaurantId={cancelTarget.restaurant_id} />
                   </h3>
                   <p className="text-xs text-ink-soft">
                     The customer will see this reason.

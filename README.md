@@ -41,21 +41,48 @@ Run `add-outlet-staff.sql` after the customer app's `022_multi_outlet.sql` and
 
 * **null** — every outlet. The owner/super-admin: sees all orders, is alerted
   for all of them, and gets an outlet dropdown in the topbar of Active Orders,
-  Order History, Overview, Reporting, Complaints, Settings and Outlets. The
-  choice follows them from page to page.
+  Order History, Overview, Reporting, Complaints, Settings, Outlets and Menu
+  (where it scopes availability, not the dish list). The choice follows them
+  from page to page.
 * **an outlet id** — that outlet only, chosen when the login is created. Their
   board, history, reports, complaints, sidebar badges and new-order alarm are
   filtered to it, and the open/closed switch acts on their branch alone. They
   see a locked chip instead of the dropdown.
+
+### Which branch an order came from
+
+An admin on **All outlets** is watching two kitchens at once, so every place an
+order appears names its branch: the cards and detail panel on Active Orders,
+the late-order alarm and the accept / cancel / change-rider dialogs, a **Branch**
+column in Order History (and in its CSV export), Recent Orders on the Overview
+(and its export), the complaint list and report, the new-order toast, and a
+rider's assigned orders. `src/lib/outletScope.js`'s `useOutletTag()` is the one
+place that decides *whether* to show it and `src/components/OutletTag.jsx` is
+the chip; drop `<OutletTag restaurantId={o.restaurant_id} />` into any new order
+surface and it does the right thing on its own.
+
+It is shown only to a login that can actually see more than one branch:
+
+* **staff** — never. They're locked to one outlet, which the topbar already
+  names; repeating it on every row is noise.
+* **admin, one outlet** — never, so a single-branch dashboard is unchanged.
+* **admin, 2+ outlets** — always, *including* while a single outlet is picked in
+  the switcher, so the answer doesn't appear and disappear as they use it.
+
+An order whose `restaurant_id` is null (placed before the customer app's
+multi-outlet migration, or pointing at a branch that was deleted rather than
+retired) is chipped "No branch" / "Unknown branch" rather than left blank —
+silence would read as "same branch as the row above".
 
 Outlets live in `public.restaurants` — the same rows the customer app reads — so
 an outlet added on the Outlets page (owner only) appears in the customer's
 picker immediately. Retire one by unticking "Visible to customers"; never delete
 the row, or its orders lose the branch that cooked them.
 
-**The menu is shared across outlets.** `products` carries no `restaurant_id`, so
-every branch serves the same dishes at the same prices — per-outlet menus would
-be a schema change, not a setting.
+**The dish list is shared across outlets; availability is not.** `products`
+carries no `restaurant_id`, so every branch serves the same dishes, with the
+same names, photos and prices. What each branch controls on its own is whether
+a dish is *being served right now* — see **Per-branch availability** below.
 
 `src/lib/permissions.js` is the single registry. Adding an entry there is what
 puts a new permission on the Users page, in the sidebar and in the route guard;
@@ -64,6 +91,44 @@ migration is needed. Anything a staff login must not be able to do straight
 from the API also needs a guard in `add-staff-permissions.sql` — the ones for
 opening/closing the restaurant, re-assigning riders, cancelling orders and
 granting permissions are already there.
+
+## Per-branch availability
+
+Run `add-outlet-menu-availability.sql` once in the Supabase SQL editor, after
+`add-outlet-staff.sql`. Menu Management then gets the outlet switcher in its
+topbar — the only page where the switcher does **not** filter the list:
+
+* Every branch shows the same dishes at the same prices. That is still one
+  `products` row per dish; nothing is duplicated.
+* The **Availability** switch acts on the branch in the topbar. Kidwai Nagar can
+  86 the mutton korma while Swaroop Nagar keeps selling it, "back in 2 hrs" and
+  all. The column header, the header line and the turn-off dialog each name the
+  branch being switched, so the scope is on screen at the moment of clicking.
+* An admin on **All outlets** switches every branch at once, and that clears any
+  per-branch overrides so no branch is left contradicting the switch. A dish the
+  branches disagree about is flagged on its row — *Off at Swaroop Nagar* — so a
+  split is visible without hunting for it.
+* Sold-out counts, the Stock Overview, "Mark N Sold Out Available" and the CSV
+  export all follow the same branch. The export names it in the filename, and on
+  All outlets adds a column per branch.
+
+The model is **default + override**: `products.is_available` is the chain-wide
+default, and a row in `product_outlet_availability` overrides it for one branch.
+No row means that branch follows the default — so with the table empty, the menu
+behaves exactly as it did before, and there is nothing to back-fill. **The row
+wins, not the value:** an override saying "available" keeps a dish on at that
+branch even while the default is off, and carries its own comeback time. The
+`public.menu_for_outlet(uuid)` function in the migration is the one correct way
+to read it; the customer app should call that rather than re-deriving the rule
+(`handoff-customer-app-columns.md` §4 spells this out for them — **until they
+do, both outlets still show the same availability to customers**).
+
+Outlet-scoped staff may only write their own branch's rows, in the database as
+well as in the UI, so a branch login cannot 86 a dish in the other kitchen from
+the API. Writes are also gated on `page.menu`.
+
+Without the migration the page falls back to what it always did — one
+chain-wide switch — and says so under its heading.
 
 ## Offers & coupons
 

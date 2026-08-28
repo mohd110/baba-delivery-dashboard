@@ -124,6 +124,42 @@ export function useOutletScope() {
   }
 }
 
+/* ── Which branch is this order from? ─────────────────────────────────────
+ * An admin on "All outlets" is looking at two kitchens at once, and nothing
+ * else on an order row says which one it belongs to — the dishes don't (the
+ * menu is shared chain-wide), and neither do the customer or the rider. Every
+ * order surface therefore names the branch, but only for a login that can
+ * actually see more than one:
+ *
+ *   staff (locked to an outlet)  never — the topbar already says where they
+ *                                are, and repeating it on every row is noise.
+ *   admin, one outlet            never — nothing to disambiguate.
+ *   admin, 2+ outlets            always, including while a single outlet is
+ *                                picked, so the answer doesn't come and go as
+ *                                they use the switcher.
+ *
+ * `show` is the one place that rule lives. Anything that just wants a chip
+ * renders <OutletTag/>, which returns null when it doesn't apply; callers that
+ * need the raw string (a CSV column, a conditional table column) read `show`
+ * and `labelOf` from here. */
+export function useOutletTag() {
+  const { outlets, locked, isAdmin } = useOutletScope()
+  const show = isAdmin && !locked && outlets.length > 1
+
+  /* Null id = an order placed before the outlet column existed (or a branch
+   * that was deleted rather than retired): still worth a chip, because
+   * "unknown" is itself information when every other order names its branch.
+   * Retired outlets stay in `outlets`, so their orders keep their real name. */
+  const labelOf = (restaurantId) => {
+    if (!restaurantId) return 'No branch'
+    return outlets.find((o) => o.id === restaurantId)?.label ?? 'Unknown branch'
+  }
+
+  // `outlets` comes back too, so a caller that wants to say "all 3 branches"
+  // doesn't have to call useOutletScope() a second time for the count.
+  return { show, labelOf, outlets }
+}
+
 /* For non-React callers (realtime handlers set up outside a component). */
 export function currentScopeId() {
   return stored

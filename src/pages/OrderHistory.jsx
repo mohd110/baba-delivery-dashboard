@@ -17,8 +17,9 @@ import {
 import Topbar, { TopIcons } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
 import { patchRowFromEvent, useRowMirror } from '../lib/realtimeRows.js'
-import { useOutletScope } from '../lib/outletScope.js'
+import { useOutletScope, useOutletTag } from '../lib/outletScope.js'
 import OutletSwitcher from '../components/OutletSwitcher.jsx'
+import OutletTag from '../components/OutletTag.jsx'
 import { orderCode } from '../lib/format.js'
 import { boldLast4 } from '../components/OrderIdLabel.jsx'
 import OrderTimeline from '../components/OrderTimeline.jsx'
@@ -56,6 +57,9 @@ export default function OrderHistory() {
   const [selectedOrderId, setSelectedOrderId] = useState(null)
   // History is scoped to the outlet in the topbar (fixed, for staff).
   const { scopeId, matches } = useOutletScope()
+  // An admin looking at two branches at once gets a Branch column; a staffer
+  // (or a single-outlet business) doesn't — see useOutletTag.
+  const { show: showBranch, labelOf: branchLabel } = useOutletTag()
 
   const load = useCallback(async () => {
     // Rider join with the full vehicle/KYC detail. Those columns only exist
@@ -135,10 +139,18 @@ export default function OrderHistory() {
       alert('No historical records in the current filter to export.')
       return
     }
-    const headers = ['Order ID', 'Date', 'Customer', 'Rider', 'Vehicle', 'Items', 'Total', 'Status']
+    // The branch column follows the same rule as the on-screen one, so an
+    // export from a staff login looks exactly as it always did.
+    const headers = [
+      'Order ID',
+      'Date',
+      ...(showBranch ? ['Branch'] : []),
+      'Customer', 'Rider', 'Vehicle', 'Items', 'Total', 'Status',
+    ]
     const rows = filteredOrders.map((o) => [
       orderCode(o),
       o.created_at ? new Date(o.created_at).toLocaleString('en-IN') : '',
+      ...(showBranch ? [branchLabel(o.restaurant_id)] : []),
       o.delivery_address?.name || 'Customer',
       o.rider?.full_name || '',
       o.rider?.vehicle_registration_number || '',
@@ -245,6 +257,7 @@ export default function OrderHistory() {
                 <tr className="border-b border-line bg-canvas/30 text-[10px] font-bold uppercase tracking-wider text-ink-soft">
                   <th className="px-6 py-3.5">Order ID</th>
                   <th className="px-6 py-3.5">Date & Time</th>
+                  {showBranch && <th className="px-6 py-3.5">Branch</th>}
                   <th className="px-6 py-3.5">Customer</th>
                   <th className="px-6 py-3.5">Items Summary</th>
                   <th className="px-6 py-3.5">Total Amount</th>
@@ -255,13 +268,13 @@ export default function OrderHistory() {
               <tbody className="divide-y divide-line-soft">
                 {loading ? (
                   <tr>
-                    <td colSpan={7} className="px-6 py-12 text-center text-xs text-ink-soft">
+                    <td colSpan={showBranch ? 8 : 7} className="px-6 py-12 text-center text-xs text-ink-soft">
                       Loading history log...
                     </td>
                   </tr>
                 ) : filteredOrders.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="px-6 py-16 text-center text-xs text-ink-soft">
+                    <td colSpan={showBranch ? 8 : 7} className="px-6 py-16 text-center text-xs text-ink-soft">
                       <History className="h-8 w-8 mx-auto text-line-2 mb-2" />
                       <p className="font-semibold text-ink">No historical records found</p>
                       <p className="mt-1">Adjust filters or check back later</p>
@@ -296,6 +309,11 @@ export default function OrderHistory() {
                           </span>
                         </td>
                         <td className="px-6 py-4 text-xs text-ink-soft">{timestamp}</td>
+                        {showBranch && (
+                          <td className="px-6 py-4">
+                            <OutletTag restaurantId={o.restaurant_id} />
+                          </td>
+                        )}
                         <td className="px-6 py-4 text-xs font-semibold text-ink">
                           {o.delivery_address?.name || 'Customer'}
                         </td>
@@ -332,6 +350,7 @@ export default function OrderHistory() {
                 <p className="text-[10px] text-ink-soft mt-0.5">
                   Logged on {new Date(selectedOrder.created_at).toLocaleString()}
                 </p>
+                <OutletTag restaurantId={selectedOrder.restaurant_id} className="mt-1.5" />
               </div>
               <button
                 onClick={() => setSelectedOrderId(null)}

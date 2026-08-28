@@ -18,8 +18,9 @@ import { boldLast4 } from '../components/OrderIdLabel.jsx'
 import DateRangeFilter from '../components/DateRangeFilter.jsx'
 import { inRange, rangeLabel } from '../lib/dateRange.js'
 import { exportToCsv } from '../lib/csv.js'
-import { useOutletScope } from '../lib/outletScope.js'
+import { useOutletScope, useOutletTag } from '../lib/outletScope.js'
 import OutletSwitcher from '../components/OutletSwitcher.jsx'
+import OutletTag from '../components/OutletTag.jsx'
 
 function dishImg(name = '') {
   const n = name.toLowerCase()
@@ -91,14 +92,17 @@ const statusStyles = {
   CANCELLED: 'bg-[#fee2e2] text-[#b91c1c]',
 }
 
-function OrderRow({ img, name, id, price, status }) {
+function OrderRow({ img, name, id, price, status, restaurantId }) {
   return (
     <div className="flex items-center justify-between py-2">
-      <div className="flex items-center gap-3">
-        <img src={img} alt="" className="h-10 w-10 rounded-lg bg-line-2 object-cover" loading="lazy" decoding="async" />
-        <div>
-          <p className="text-sm font-semibold text-ink">{name}</p>
-          <p className="text-xs text-ink-soft">{boldLast4(id)}</p>
+      <div className="flex min-w-0 items-center gap-3">
+        <img src={img} alt="" className="h-10 w-10 shrink-0 rounded-lg bg-line-2 object-cover" loading="lazy" decoding="async" />
+        <div className="min-w-0">
+          <p className="truncate text-sm font-semibold text-ink">{name}</p>
+          <p className="flex items-center gap-1.5 text-xs text-ink-soft">
+            {boldLast4(id)}
+            <OutletTag restaurantId={restaurantId} />
+          </p>
         </div>
       </div>
       <div className="flex flex-col items-end gap-1">
@@ -193,6 +197,8 @@ export default function Overview() {
   // The overview covers the outlet in the topbar — all outlets for an admin
   // who hasn't narrowed it, that outlet alone for everyone else.
   const { scopeId, matches } = useOutletScope()
+  // Naming the branch on each recent order — admins with 2+ outlets only.
+  const { show: showBranch, labelOf: branchLabel } = useOutletTag()
 
   const ordersRef = useRowMirror(orders)
 
@@ -259,10 +265,11 @@ export default function Overview() {
       alert('No orders in the selected range to export.')
       return
     }
-    const headers = ['Order', 'Date', 'Status', 'Total']
+    const headers = ['Order', 'Date', ...(showBranch ? ['Branch'] : []), 'Status', 'Total']
     const rows = scoped.map((o) => [
       orderCode(o),
       o.created_at ? new Date(o.created_at).toLocaleString('en-IN') : '',
+      ...(showBranch ? [branchLabel(o.restaurant_id)] : []),
       o.status,
       o.total ?? 0,
     ])
@@ -293,6 +300,7 @@ export default function Overview() {
       img: dishImg(name),
       name: label,
       id: `#${orderCode(o)}`,
+      restaurantId: o.restaurant_id,
       price: `₹${o.total}`,
       status: RECENT_STATUS[o.status] ?? 'PENDING',
     }

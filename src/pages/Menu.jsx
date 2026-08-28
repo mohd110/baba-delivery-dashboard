@@ -4,13 +4,15 @@ import {
   Sandwich, TrendingUp, CheckCircle2, AlertTriangle,
   XCircle, X, Upload, ImagePlus, Trash2, Pencil, Tag,
   ChevronLeft, ChevronRight, ChevronUp, ChevronDown, Salad, Utensils,
-  ZoomIn, ZoomOut, Move, RotateCcw, Download,
+  ZoomIn, ZoomOut, Move, RotateCcw, Download, Store,
 } from 'lucide-react'
 import Topbar, { SearchBox, TopIcons, Divider, ProfileChip } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
 import { useRowMirror } from '../lib/realtimeRows.js'
 import { exportToCsv } from '../lib/csv.js'
 import { compressImage, supportsWebp } from '../lib/compressImage.js'
+import { useOutletScope } from '../lib/outletScope.js'
+import OutletSwitcher from '../components/OutletSwitcher.jsx'
 
 // Canonical menu categories, in the exact order they should appear. Slugs are
 // kept stable (fry/gravy/tandoor/other) so existing dishes stay categorised;
@@ -447,6 +449,11 @@ const EMPTY_FORM = { name: '', price: '', description: '', category: 'biryani', 
 const PAGE_SIZE = 15
 
 export default function Menu() {
+  /* Which branch this page is acting on. Unlike every other outlet-scoped page
+   * this one does NOT filter the list — every branch serves the same dishes at
+   * the same prices — it scopes the AVAILABILITY switch: `scopeId` set means
+   * "86 this dish here", null (admin on All outlets) means "everywhere". */
+  const { scopeId, scopeLabel, outlets } = useOutletScope()
   const [active, setActive]       = useState('all')
   const [products, setProducts]   = useState([])
   const [loading, setLoading]     = useState(true)
@@ -487,6 +494,16 @@ export default function Menu() {
   // Turn off modal
   const [turnOffTarget, setTurnOffTarget] = useState(null)
   const [turnOffCustom, setTurnOffCustom] = useState('')
+
+  /* ── Per-branch availability ──────────────────────────────────────────────
+   * `products.is_available` is the chain-wide default; a row in
+   * product_outlet_availability overrides it for ONE branch. Keyed
+   * `productId:restaurantId`; a missing key means that branch follows the
+   * default. See add-outlet-menu-availability.sql for the same rule in SQL. */
+  const [overrides, setOverrides] = useState(() => new Map())
+  // False until add-outlet-menu-availability.sql has been run. Everything below
+  // falls back to the chain-wide flag, so the page works untouched without it.
+  const [hasOverrides, setHasOverrides] = useState(false)
 
   /* ── Load products ── */
   // Ordered by sortProducts(): category order, then the saved sort_order within
@@ -545,11 +562,30 @@ export default function Menu() {
     setCategories([...base, ...extras, ...others])
   }, [])
 
+  /* ── Load the per-branch availability overrides ── */
+  // One small table, read whole: there are only ever rows for dishes a branch
+  // has actually turned off, so this stays a handful of rows even on a big menu.
+  const loadOverrides = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('product_outlet_availability')
+      .select('product_id, restaurant_id, is_available, next_available_at')
+    if (error) {
+      // The migration hasn't been run yet (or was rolled back): fall back to the
+      // chain-wide flag, which is exactly how the menu behaved before this.
+      setHasOverrides(false)
+      setOverrides(new Map())
+      return
+    }
+    setHasOverrides(true)
+    setOverrides(new Map((data ?? []).map((r) => [`${r.product_id}:${r.restaurant_id}`, r])))
+  }, [])
+
   const productsRef = useRowMirror(products)
 
   useEffect(() => {
     load()
     loadCategories()
+    loadOverrides()
     const channel = supabase.channel('menu-products')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, (payload) => {
         // Mid back-fill: we're writing these values ourselves and already know
@@ -563,9 +599,13 @@ export default function Menu() {
         if (!row?.id || !productsRef.current.some((p) => p.id === row.id)) { load(); return }
         setProducts((prev) => sortProducts(prev.map((p) => (p.id === row.id ? { ...p, ...row } : p))))
       })
+      // A branch turning a dish off has to reach the other tabs watching this
+      // page. The table is tiny, so re-read it rather than patching by hand.
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'product_outlet_availability' },
+        () => loadOverrides())
       .subscribe()
     return () => { supabase.removeChannel(channel) }
-  }, [load, loadCategories, productsRef])
+  }, [load, loadCategories, loadOverrides, productsRef])
 
   /* ── Reorder a dish within its category ── */
   // Swaps this dish's sort_order with its neighbour (dir -1 = up, +1 = down) in
@@ -731,6 +771,109 @@ export default function Menu() {
     if (error) { alert(`Could not delete: ${error.message}`); load() }
   }
 
+  /* ── Availability: reading it ─────────────────────────────────────────────
+   * Per-branch availability only applies once the migration has been run AND
+   * the business actually has more than one branch — otherwise there is nothing
+   * to differ, and the chain-wide flag stays the whole story. */
+  const perBranch = hasOverrides && outlets.length > 1
+
+  // Availability of `p` at one branch: the override row if that branch has one,
+  // the chain-wide default if it doesn't. The ROW wins, not the value — an
+  // override saying "available" keeps a dish on at that branch even while the
+  // default is off, and it carries its own comeback time.
+  const availabilityAt = (p, outletId) => {
+    const o = outletId ? overrides.get(`${p.id}:${outletId}`) : null
+    if (o) return { isAvailable: !!o.is_available, nextAt: o.next_available_at ?? null }
+    return { isAvailable: !!p.is_available, nextAt: p.next_available_at ?? null }
+  }
+
+  /* What the status column and the toggle show, for the branch in the topbar.
+   * On "All outlets" a dish reads as on if ANY branch is serving it, and the
+   * branches that aren't come back in `offAt` so the divergence is visible
+   * rather than hidden behind one summary word. */
+  const statusOf = (p) => {
+    if (!perBranch) return { isAvailable: !!p.is_available, nextAt: p.next_available_at ?? null, offAt: [] }
+    if (scopeId) return { ...availabilityAt(p, scopeId), offAt: [] }
+    const off = outlets.filter((o) => !availabilityAt(p, o.id).isAvailable)
+    const allOff = off.length === outlets.length
+    // A comeback time only means something here if every branch agrees on it —
+    // which is the common case, since with no overrides they all read the
+    // chain-wide one. Branches due back at different times get no line rather
+    // than one branch's time presented as the chain's.
+    const nexts = new Set(outlets.map((o) => availabilityAt(p, o.id).nextAt ?? ''))
+    return {
+      isAvailable: !allOff,
+      nextAt: allOff && nexts.size === 1 ? [...nexts][0] || null : null,
+      // All branches off is already said by the badge; only a split needs naming.
+      offAt: allOff ? [] : off,
+    }
+  }
+
+  /* ── Availability: writing it ─────────────────────────────────────────────
+   * Scoped to a branch  → an override row for that branch alone. The other
+   *                       branches and the chain-wide default are untouched.
+   * All outlets (admin)  → the chain-wide default, and every override for this
+   *                       dish is dropped, so no branch is left contradicting
+   *                       the switch that was just flipped.
+   * There is deliberately no "are you sure?" on the all-outlets path: unlike
+   * the once-a-day store open/close switch, 86-ing dishes is a constant service
+   * action, so the scope is spelled out in the header, the column and the
+   * turn-off dialog instead of being confirmed on every click. */
+  const applyAvailability = async (id, isAvailable, nextAt) => {
+    const branch = perBranch ? scopeId : null
+    setBusy((prev) => new Set(prev).add(id))
+    const done = () => setBusy((prev) => { const n = new Set(prev); n.delete(id); return n })
+
+    if (branch) {
+      const key = `${id}:${branch}`
+      const row = { product_id: id, restaurant_id: branch, is_available: isAvailable, next_available_at: nextAt }
+      const prev = overrides
+      setOverrides((m) => new Map(m).set(key, row))
+      const { error } = await supabase
+        .from('product_outlet_availability')
+        .upsert(row, { onConflict: 'product_id,restaurant_id' })
+      if (error) { setOverrides(prev); alert(`Could not update availability: ${error.message}`) }
+      done()
+      return
+    }
+
+    const prevProducts = products
+    const prevOverrides = overrides
+    setProducts((ps) => ps.map((p) => (p.id === id ? { ...p, is_available: isAvailable, next_available_at: nextAt } : p)))
+    if (hasOverrides) {
+      setOverrides((m) => {
+        const n = new Map(m)
+        for (const k of n.keys()) if (k.startsWith(`${id}:`)) n.delete(k)
+        return n
+      })
+    }
+    const { error } = await supabase
+      .from('products')
+      .update({ is_available: isAvailable, next_available_at: nextAt })
+      .eq('id', id)
+    if (error) {
+      setProducts(prevProducts)
+      setOverrides(prevOverrides)
+      alert(`Could not update availability: ${error.message}`)
+      done()
+      return
+    }
+    if (hasOverrides) {
+      // Best-effort: the dish is already on/off everywhere by default, so a
+      // failure here only leaves a stale override behind — worth logging, not
+      // worth failing the toggle the manager just used.
+      const { error: clearErr } = await supabase
+        .from('product_outlet_availability')
+        .delete()
+        .eq('product_id', id)
+      if (clearErr) {
+        console.error('Could not clear per-branch overrides:', clearErr.message)
+        loadOverrides()
+      }
+    }
+    done()
+  }
+
   /* ── Availability toggle ── */
   const setAvailability = async (id, next) => {
     if (busy.has(id)) return
@@ -740,16 +883,7 @@ export default function Menu() {
       if (p) setTurnOffTarget(p)
       return
     }
-
-    // Turning back ON
-    setBusy((prev) => new Set(prev).add(id))
-    setProducts((prev) => prev.map((p) => (p.id === id ? { ...p, is_available: true, next_available_at: null } : p)))
-    const { error } = await supabase.from('products').update({ is_available: true, next_available_at: null }).eq('id', id)
-    if (error) {
-      setProducts((prev) => prev.map((p) => (p.id === id ? { ...p, is_available: false } : p)))
-      alert(`Could not update availability: ${error.message}`)
-    }
-    setBusy((prev) => { const n = new Set(prev); n.delete(id); return n })
+    await applyAvailability(id, true, null)
   }
 
   /* ── Confirm turn off with time ── */
@@ -773,27 +907,61 @@ export default function Menu() {
 
     setTurnOffTarget(null)
     setTurnOffCustom('')
-    setBusy((prev) => new Set(prev).add(id))
-    
-    setProducts((prev) => prev.map((p) => (p.id === id ? { ...p, is_available: false, next_available_at: nextAvailableAt } : p)))
-    const { error } = await supabase.from('products').update({ is_available: false, next_available_at: nextAvailableAt }).eq('id', id)
-    if (error) {
-      setProducts((prev) => prev.map((p) => (p.id === id ? { ...p, is_available: true, next_available_at: null } : p)))
-      alert(`Could not update availability: ${error.message}`)
-    }
-    setBusy((prev) => { const n = new Set(prev); n.delete(id); return n })
+    // Off at the branch in the topbar, or everywhere on "All outlets" — the
+    // dialog that led here says which.
+    await applyAvailability(id, false, nextAvailableAt)
   }
 
   /* ── Bulk mark available ── */
   const [bulkBusy, setBulkBusy] = useState(false)
+  // Brings back everything that is off *in the current view*: one branch's
+  // sold-out list for a scoped login, the whole chain for an admin on All
+  // outlets (which also clears the per-branch overrides, same as one toggle).
   const updateAllAvailable = async () => {
-    const offIds = products.filter((p) => !p.is_available).map((p) => p.id)
+    const offIds = products.filter((p) => !statusOf(p).isAvailable).map((p) => p.id)
     if (bulkBusy || offIds.length === 0) return
     setBulkBusy(true)
-    const prev = products
-    setProducts((p) => p.map((x) => ({ ...x, is_available: true })))
-    const { error } = await supabase.from('products').update({ is_available: true }).in('id', offIds)
-    if (error) { setProducts(prev); alert(`Could not update: ${error.message}`) }
+    const branch = perBranch ? scopeId : null
+    const prevProducts = products
+    const prevOverrides = overrides
+
+    if (branch) {
+      const rows = offIds.map((id) => ({
+        product_id: id, restaurant_id: branch, is_available: true, next_available_at: null,
+      }))
+      setOverrides((m) => {
+        const n = new Map(m)
+        rows.forEach((r) => n.set(`${r.product_id}:${branch}`, r))
+        return n
+      })
+      const { error } = await supabase
+        .from('product_outlet_availability')
+        .upsert(rows, { onConflict: 'product_id,restaurant_id' })
+      if (error) { setOverrides(prevOverrides); alert(`Could not update: ${error.message}`) }
+      setBulkBusy(false)
+      return
+    }
+
+    setProducts((p) => p.map((x) => ({ ...x, is_available: true, next_available_at: null })))
+    if (hasOverrides) setOverrides(new Map())
+    const { error } = await supabase
+      .from('products')
+      .update({ is_available: true, next_available_at: null })
+      .in('id', offIds)
+    if (error) {
+      setProducts(prevProducts)
+      setOverrides(prevOverrides)
+      alert(`Could not update: ${error.message}`)
+      setBulkBusy(false)
+      return
+    }
+    if (hasOverrides) {
+      const { error: clearErr } = await supabase
+        .from('product_outlet_availability')
+        .delete()
+        .in('product_id', offIds)
+      if (clearErr) { console.error('Could not clear per-branch overrides:', clearErr.message); loadOverrides() }
+    }
     setBulkBusy(false)
   }
 
@@ -857,8 +1025,10 @@ export default function Menu() {
   }
   const canReorder = q === ''
 
-  const inStock  = products.filter((p) => p.is_available).length
-  const soldOut  = products.filter((p) => !p.is_available).length
+  // Counted for the branch in the topbar, so a manager's "how many are we out
+  // of?" is about their own kitchen and not the chain.
+  const inStock  = products.filter((p) => statusOf(p).isAvailable).length
+  const soldOut  = products.filter((p) => !statusOf(p).isAvailable).length
   // Item count per category slug, for the tab badges.
   const catCounts = products.reduce((acc, p) => {
     const slug = effectiveCategory(p.category, p.name)
@@ -889,18 +1059,32 @@ export default function Menu() {
       rank(a) - rank(b) ||
       (a.created_at || '').localeCompare(b.created_at || '') ||
       (a.name || '').localeCompare(b.name || ''))
-    const headers = ['#', 'Dish', 'Category', 'Price', 'Available', 'Veg', 'Variants', 'Description']
+    // "Available" is the branch in the topbar. On All outlets each branch also
+    // gets its own column, so the export answers "what is Swaroop Nagar out of?"
+    // rather than flattening the two kitchens into one Yes/No.
+    const perBranchCols = perBranch && !scopeId ? outlets : []
+    const headers = [
+      '#', 'Dish', 'Category', 'Price',
+      perBranch && scopeId ? `Available (${scopeLabel})` : 'Available',
+      ...perBranchCols.map((o) => `Available — ${o.label}`),
+      'Veg', 'Variants', 'Description',
+    ]
+    const yesNo = (on) => (on ? 'Yes' : 'Sold out')
     const rows = sorted.map((p, i) => [
       i + 1,
       p.name || '',
       categoryLabel(p.category, p.name, categories),
       p.price ?? '',
-      p.is_available ? 'Yes' : 'Sold out',
+      yesNo(statusOf(p).isAvailable),
+      ...perBranchCols.map((o) => yesNo(availabilityAt(p, o.id).isAvailable)),
       productIsVeg(p) ? 'Veg' : 'Non-veg',
       Array.isArray(p.variants) ? p.variants.filter((v) => v.name).map((v) => `${v.name}: ${v.price}`).join(' | ') : '',
       p.description || '',
     ])
-    exportToCsv(`menu-${new Date().toISOString().slice(0, 10)}.csv`, headers, rows)
+    // Name the branch in the file: a branch's sold-out list and the whole
+    // chain's menu are different documents.
+    const branchTag = perBranch && scopeId ? `-${scopeLabel.toLowerCase().replace(/\s+/g, '-')}` : ''
+    exportToCsv(`menu${branchTag}-${new Date().toISOString().slice(0, 10)}.csv`, headers, rows)
   }
 
   /* ── Shared modal form fields ── */
@@ -979,6 +1163,9 @@ export default function Menu() {
         <SearchBox placeholder="Search dishes, prices, or categories..." className="w-full max-w-[420px]"
           value={searchQuery} onChange={handleSearch} />
         <div className="flex items-center gap-1">
+          {/* The switcher picks which branch the availability toggles act on —
+              it does NOT filter the dish list, which is the same everywhere. */}
+          <OutletSwitcher />
           <TopIcons /><Divider />
           <ProfileChip name="Wali Baba Foods" sub="Delivery Admin" />
         </div>
@@ -994,6 +1181,30 @@ export default function Menu() {
           <div>
             <h1 className="text-[32px] font-bold leading-8 text-ink">Menu Management</h1>
             <p className="mt-2 text-base text-ink-soft">Organize your culinary offerings, update pricing, and manage availability in real-time.</p>
+            {/* Say exactly what is shared and what isn't, right where the edits
+                are made. Shown to staff too: a branch manager must know their
+                toggle stops at their own kitchen. */}
+            {outlets.length > 1 && (
+              <p className="mt-2 flex items-start gap-1.5 text-sm text-ink-soft">
+                <Store className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                {perBranch ? (
+                  <span>
+                    One dish list for all {outlets.length} branches — same names, photos and
+                    prices. <span className="font-semibold text-ink">Availability is per branch</span>,
+                    and these switches act on{' '}
+                    <span className="font-semibold text-ink">
+                      {scopeId ? scopeLabel : `all ${outlets.length} branches at once`}
+                    </span>.
+                  </span>
+                ) : (
+                  <span>
+                    One menu for all {outlets.length} branches — every edit here, availability
+                    included, applies everywhere. Run <code className="rounded bg-line-soft px-1 py-0.5 text-[11px]">add-outlet-menu-availability.sql</code>{' '}
+                    to turn dishes off per branch.
+                  </span>
+                )}
+              </p>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <button onClick={exportMenu}
@@ -1044,7 +1255,11 @@ export default function Menu() {
                 <th className="px-5 py-3">Category</th>
                 <th className="px-5 py-3">Price / Variants</th>
                 <th className="px-5 py-3">Status</th>
-                <th className="px-5 py-3">Availability</th>
+                {/* Name the branch in the header the switch lives under, so the
+                    scope is on screen at the moment of clicking it. */}
+                <th className="px-5 py-3">
+                  {perBranch ? `Availability · ${scopeId ? scopeLabel : 'All branches'}` : 'Availability'}
+                </th>
                 <th className="px-5 py-3">Actions</th>
               </tr>
             </thead>
@@ -1058,6 +1273,8 @@ export default function Menu() {
               ) : pagedProducts.map((p) => {
                 const variants = Array.isArray(p.variants) ? p.variants.filter(v => v.name) : []
                 const pos = catPos(p)
+                // Availability for the branch in the topbar (see statusOf).
+                const st = statusOf(p)
                 return (
                   <tr key={p.id} className="hover:bg-line-soft/40 transition-colors">
                     <td className="px-5 py-4">
@@ -1088,19 +1305,27 @@ export default function Menu() {
                     </td>
                     <td className="px-5 py-4">
                       <div className="flex flex-col">
-                        <span className={`flex items-center gap-1.5 text-sm font-medium ${p.is_available ? 'text-pos' : 'text-brand'}`}>
-                          <span className={`h-1.5 w-1.5 rounded-full ${p.is_available ? 'bg-pos' : 'bg-brand'}`} />
-                          {p.is_available ? 'Active' : 'Unavailable'}
+                        <span className={`flex items-center gap-1.5 text-sm font-medium ${st.isAvailable ? 'text-pos' : 'text-brand'}`}>
+                          <span className={`h-1.5 w-1.5 rounded-full ${st.isAvailable ? 'bg-pos' : 'bg-brand'}`} />
+                          {st.isAvailable ? 'Active' : 'Unavailable'}
                         </span>
-                        {!p.is_available && p.next_available_at && (
+                        {!st.isAvailable && st.nextAt && (
                           <span className="mt-1 text-[10px] font-semibold text-ink-soft">
-                            Until {formatFutureTime(p.next_available_at)}
+                            Until {formatFutureTime(st.nextAt)}
+                          </span>
+                        )}
+                        {/* Only on "All outlets", and only when the branches
+                            disagree — otherwise the summary above is the whole
+                            truth and this would just be noise on every row. */}
+                        {st.offAt.length > 0 && (
+                          <span className="mt-1 text-[10px] font-semibold text-brand">
+                            Off at {st.offAt.map((o) => o.label).join(', ')}
                           </span>
                         )}
                       </div>
                     </td>
                     <td className="px-5 py-4">
-                      <Toggle on={p.is_available} disabled={busy.has(p.id)} onChange={() => setAvailability(p.id, !p.is_available)} />
+                      <Toggle on={st.isAvailable} disabled={busy.has(p.id)} onChange={() => setAvailability(p.id, !st.isAvailable)} />
                     </td>
                     <td className="px-5 py-4">
                       <div className="flex items-center gap-2">
@@ -1298,7 +1523,17 @@ export default function Menu() {
             <div className="flex items-center justify-between border-b border-line p-5">
               <div>
                 <h3 className="text-base font-bold text-ink">Turn Off Dish</h3>
-                <p className="text-xs text-ink-soft">{turnOffTarget.name}</p>
+                <p className="text-xs text-ink-soft">
+                  {turnOffTarget.name}
+                  {perBranch && (
+                    <>
+                      {' · '}
+                      <span className="font-semibold text-ink">
+                        {scopeId ? `at ${scopeLabel}` : `at all ${outlets.length} branches`}
+                      </span>
+                    </>
+                  )}
+                </p>
               </div>
               <button type="button" onClick={() => setTurnOffTarget(null)}
                 className="rounded p-1 text-ink-soft hover:bg-line-soft hover:text-ink"><X className="h-4 w-4" /></button>

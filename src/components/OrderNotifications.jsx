@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { BellRing } from 'lucide-react'
 import { supabase } from '../lib/supabase.js'
 import { orderCode } from '../lib/format.js'
-import { useOutletScope } from '../lib/outletScope.js'
+import { useOutletScope, useOutletTag } from '../lib/outletScope.js'
 import { boldLast4 } from './OrderIdLabel.jsx'
 
 let toastSeq = 0
@@ -53,13 +53,13 @@ export default function OrderNotifications() {
    * while an admin on "All outlets" hears every branch — which is the point of
    * the super-admin view. Held in a ref so switching outlet doesn't tear down
    * the subscription (and miss an order in the gap). */
-  const { matches, outlets } = useOutletScope()
+  const { matches } = useOutletScope()
   const matchesRef = useRef(matches)
   useEffect(() => { matchesRef.current = matches }, [matches])
-  // Which branch an order came from, resolved at render time — only worth
-  // naming once there is more than one outlet.
-  const outletLabel = (id) =>
-    outlets.length > 1 ? outlets.find((o) => o.id === id)?.label ?? null : null
+  // Which branch an order came from, on the same rule every other order
+  // surface uses: named for an admin who can see more than one, silent for a
+  // staffer already locked to theirs.
+  const { show: showBranch, labelOf: branchLabel } = useOutletTag()
 
   useEffect(() => {
     // Drop every toast for an order that is no longer awaiting acceptance,
@@ -141,9 +141,9 @@ export default function OrderNotifications() {
           <div className="min-w-0 flex-1">
             <p className="flex items-center gap-1.5 text-sm font-bold text-ink">
               New order received
-              {outletLabel(t.outletId) && (
+              {showBranch && (
                 <span className="rounded-full bg-line-soft px-1.5 py-px text-[10px] font-bold uppercase tracking-wide text-ink-soft">
-                  {outletLabel(t.outletId)}
+                  {branchLabel(t.outletId)}
                 </span>
               )}
             </p>
