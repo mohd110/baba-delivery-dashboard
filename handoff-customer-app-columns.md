@@ -87,87 +87,18 @@ update public.products set photo_url = null where photo_url like 'data:%';
 
 ## 4. Per-outlet dish availability — new table `public.product_outlet_availability`
 
-**This is the one item in this document that needs a code change on your side.**
-Until you make it, both outlets keep showing the same availability.
+**This one needs a code change on your side** — it has its own document, because
+there is more to say than a column table:
 
-The menu itself is still chain-wide: one `products` row per dish, one name, one
-photo, one price, at every outlet. `products` still has **no** `restaurant_id`
-and no dish is duplicated. What is now per-outlet is only whether a dish is
-**being served right now** — Kidwai Nagar runs out of mutton, Swaroop Nagar
-hasn't.
+> **→ `handoff-customer-app-outlet-menu.md`**
 
-```sql
-create table public.product_outlet_availability (
-  product_id        uuid not null references public.products(id)    on delete cascade,
-  restaurant_id     uuid not null references public.restaurants(id) on delete cascade,
-  is_available      boolean not null default true,
-  next_available_at timestamptz,
-  updated_at        timestamptz not null default now(),
-  primary key (product_id, restaurant_id)
-);
-```
-
-### The rule
-
-`products.is_available` is the chain-wide **default**. A row in this table is an
-**override** for one outlet. No row = that outlet follows the default.
-
-> **The row wins, not the value.** An override saying `true` keeps a dish on at
-> that outlet even while the chain-wide default is `false`, and it carries its
-> own `next_available_at`. Do **not** `coalesce()` the two columns independently
-> — `coalesce(a.next_available_at, p.next_available_at)` is wrong, because it
-> resurrects the chain-wide comeback time for an outlet that is happily serving
-> the dish.
-
-```
-availability of dish D at outlet X
-  = row (D, X) exists ? that row's (is_available, next_available_at)
-                      : products' (is_available, next_available_at)
-```
-
-### The easy way to read it
-
-Don't reimplement that rule — there's an RPC that returns the menu with exactly
-the shape of `products`, already resolved for one outlet:
-
-```js
-// was: supabase.from('products').select('*')
-const { data } = await supabase.rpc('menu_for_outlet', { outlet: restaurantId })
-```
-
-Same columns, same types, same `sort_order`, so ordering/filtering/rendering code
-downstream is untouched — `is_available` and `next_available_at` just now mean
-"at this outlet". Passing `null` returns the chain-wide defaults (today's
-behaviour), which is a safe fallback if no outlet is chosen yet.
-
-If you'd rather keep your own query, join it yourself:
-
-```sql
-select p.*,
-       coalesce(a.is_available, p.is_available) as is_available,
-       case when a.product_id is null then p.next_available_at
-            else a.next_available_at end        as next_available_at
-  from public.products p
-  left join public.product_outlet_availability a
-         on a.product_id = p.id
-        and a.restaurant_id = :outlet;
-```
-
-### Notes
-
-* **Nothing was back-filled.** The table starts empty, and an empty table means
-  every outlet follows the chain-wide flag — i.e. exactly what you do today. You
-  can ship your change before or after the restaurant starts using the feature.
-* **A new dish is on everywhere** until someone turns it off at a branch; no row
-  is created when a dish is added.
-* RLS: public read (the anon key can select it), writes are dashboard-only.
-  Realtime is enabled, so you can subscribe if your menu screen is live.
-* The customer must have picked an outlet before you can resolve availability.
-  If your flow shows a menu before that, use the chain-wide default (`outlet:
-  null`) and re-resolve once they choose.
-
-Created by `add-outlet-menu-availability.sql` in the dashboard repo, which also
-contains the SQL for `menu_for_outlet` and a "how to check it worked" query.
+The short version: the menu stays chain-wide (one `products` row per dish, still
+no `restaurant_id`), but an outlet can now switch a single dish off without
+taking it off the other outlet's menu. `products.is_available` becomes the
+default and a row in the new table overrides it for one outlet. Swap
+`from('products').select('*')` for
+`rpc('menu_for_outlet', { outlet: restaurantId })` and you're done — same columns,
+same types. Until you do, both outlets show customers the same availability.
 
 ---
 

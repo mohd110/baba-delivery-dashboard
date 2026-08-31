@@ -120,8 +120,8 @@ wins, not the value:** an override saying "available" keeps a dish on at that
 branch even while the default is off, and carries its own comeback time. The
 `public.menu_for_outlet(uuid)` function in the migration is the one correct way
 to read it; the customer app should call that rather than re-deriving the rule
-(`handoff-customer-app-columns.md` §4 spells this out for them — **until they
-do, both outlets still show the same availability to customers**).
+(`handoff-customer-app-outlet-menu.md` is the document to send them — **until
+they ship it, both outlets still show the same availability to customers**).
 
 Outlet-scoped staff may only write their own branch's rows, in the database as
 well as in the UI, so a branch login cannot 86 a dish in the other kitchen from
