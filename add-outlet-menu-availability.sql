@@ -1,9 +1,28 @@
 -- ============================================================================
 -- Per-outlet dish availability.
 --
--- Run this once in the Supabase SQL editor, AFTER add-outlet-staff.sql (and the
--- customer app's 022_multi_outlet.sql / 023_restaurants_insert.sql).
--- Safe to re-run.
+-- Run this once in the Supabase SQL editor, AFTER add-staff-permissions.sql and
+-- add-outlet-staff.sql (and the customer app's 022_multi_outlet.sql /
+-- 023_restaurants_insert.sql). Safe to re-run.
+--
+-- BEFORE YOU RUN IT, check the two prerequisites are in place. This must return
+-- both rows; if it returns fewer, run the migrations above first or the policy
+-- at step 3 will fail:
+--
+--   select proname from pg_proc
+--    where pronamespace = 'public'::regnamespace
+--      and proname in ('staff_has_perm', 'staff_outlet_id');
+--
+-- WHAT IT DOES NOT DO
+-- -------------------
+-- It creates one new table, two new functions and their policies. It does NOT
+-- alter products, restaurants, orders or profiles, does not replace any existing
+-- function, policy or trigger, and does not read or write a single row of
+-- existing data. To undo it completely:
+--
+--   drop table public.product_outlet_availability cascade;
+--   drop function public.menu_for_outlet(uuid);
+--   drop function public.touch_product_outlet_availability();
 -- ============================================================================
 --
 -- WHAT THIS ADDS
