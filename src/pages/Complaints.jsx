@@ -13,6 +13,7 @@ import {
   AlertCircle,
   HelpCircle,
   Ban,
+  ChevronLeft,
 } from 'lucide-react'
 import Topbar, { TopIcons } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
@@ -94,6 +95,8 @@ export default function Complaints() {
   const [searchQuery, setSearchQuery] = useState('')
   const [activeTab, setActiveTab] = useState('open') // 'open', 'resolved', 'all'
   const [selectedComplaintId, setSelectedComplaintId] = useState(null)
+  // Phones show the list or the open complaint, one at a time.
+  const [mobileDetail, setMobileDetail] = useState(false)
   const [toastMessage, setToastMessage] = useState(null)
   // Complaints are scoped through the order they were raised against.
   const { scopeId } = useOutletScope()
@@ -247,7 +250,7 @@ export default function Complaints() {
   const resolvedCount = complaints.filter((c) => c.status === 'resolved').length
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-canvas">
+    <div className="flex h-full flex-col overflow-hidden bg-canvas">
       {/* Topbar */}
       <Topbar>
         <div className="flex items-center gap-3">
@@ -265,7 +268,7 @@ export default function Complaints() {
       {/* Main Dual Column Content */}
       <div className="flex flex-1 overflow-hidden">
         {/* Left Column: Master List */}
-        <div className="flex w-[380px] shrink-0 flex-col border-r border-line bg-white">
+        <div className={`${mobileDetail ? 'hidden' : 'flex'} w-full shrink-0 flex-col border-r border-line bg-white lg:flex lg:w-[380px]`}>
           {/* Search */}
           <div className="p-4 border-b border-line">
             <div className="relative">
@@ -339,7 +342,7 @@ export default function Complaints() {
                 return (
                   <div
                     key={c.id}
-                    onClick={() => setSelectedComplaintId(c.id)}
+                    onClick={() => { setSelectedComplaintId(c.id); setMobileDetail(true) }}
                     className={`flex flex-col gap-2 p-4 cursor-pointer text-left transition-all hover:bg-canvas/50 ${
                       isSelected ? 'border-l-4 border-brand bg-brand/5' : 'border-l-4 border-transparent'
                     }`}
@@ -381,12 +384,20 @@ export default function Complaints() {
         </div>
 
         {/* Right Column: Complaint Details Panel */}
-        <div className="flex-1 bg-canvas flex flex-col overflow-y-auto">
+        <div className={`${mobileDetail ? 'flex' : 'hidden'} flex-1 bg-canvas flex-col overflow-y-auto lg:flex`}>
+          {/* Phone only: back to the complaint list. */}
+          <button
+            type="button"
+            onClick={() => setMobileDetail(false)}
+            className="sticky top-0 z-10 flex items-center gap-1.5 border-b border-line bg-white px-4 py-3 text-sm font-semibold text-brand lg:hidden"
+          >
+            <ChevronLeft className="h-4 w-4" /> All complaints
+          </button>
           {selectedComplaint ? (
             <div className="flex flex-col min-h-full">
               {/* Header */}
-              <div className="border-b border-line bg-white p-6 shadow-sm">
-                <div className="flex justify-between items-start">
+              <div className="border-b border-line bg-white p-4 shadow-sm lg:p-6">
+                <div className="flex flex-wrap justify-between items-start gap-3">
                   <div>
                     <div className="flex items-center gap-3">
                       <h2 className="flex items-center gap-2 text-lg font-bold text-ink">
@@ -407,7 +418,7 @@ export default function Complaints() {
               </div>
 
               {/* Grid content */}
-              <div className="grid flex-1 grid-cols-1 lg:grid-cols-3 gap-6 p-6">
+              <div className="grid flex-1 grid-cols-1 lg:grid-cols-3 gap-4 p-4 lg:gap-6 lg:p-6">
                 {/* Left Area (Complaint statement, customer, items) */}
                 <div className="lg:col-span-2 space-y-6">
                   {/* Issue Statement */}

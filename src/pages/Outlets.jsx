@@ -548,7 +548,7 @@ export default function Outlets() {
         <div className="flex items-center gap-2">
           <SearchBox
             placeholder="Search outlets..."
-            className="w-[260px]"
+            className="w-full sm:w-[260px]"
             value={searchQuery}
             onChange={setSearchQuery}
           />
@@ -565,8 +565,8 @@ export default function Outlets() {
         </div>
       </Topbar>
 
-      <div className="space-y-6 p-8">
-        <div className="grid grid-cols-4 gap-6">
+      <div className="space-y-6 p-4 lg:p-8">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-6">
           {kpis.map((k) => (
             <Kpi key={k.label} {...k} />
           ))}
@@ -588,7 +588,7 @@ export default function Outlets() {
             {q ? 'No outlets match your search.' : 'No outlets yet — they appear here once a restaurant is added.'}
           </div>
         ) : (
-          <div className="grid grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3 lg:gap-6">
             {visibleOutlets.map((o) => (
               <OutletCard key={o.id} o={o} onEdit={isAdmin ? setFormTarget : null} />
             ))}

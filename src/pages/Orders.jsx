@@ -24,10 +24,14 @@ import {
   Bell,
   BellOff,
   UserCog,
+  MessageSquareText,
+  ChevronLeft,
 } from 'lucide-react'
 import Topbar, { TopIcons } from '../layout/Topbar.jsx'
 import { supabase } from '../lib/supabase.js'
-import { orderCode } from '../lib/format.js'
+import { orderCode, orderNote } from '../lib/format.js'
+import OrderNote from '../components/OrderNote.jsx'
+import { showDeviceNotification } from '../lib/device.js'
 import { OrderIdLabel } from '../components/OrderIdLabel.jsx'
 import OrderTimeline from '../components/OrderTimeline.jsx'
 import LiveMap from '../components/LiveMap.jsx'
@@ -287,13 +291,12 @@ function stopSpeaking() {
 // into the original notification and nothing is shown the second time.
 function notifyLateDesktop(order, nonce = '') {
   try {
-    if (!('Notification' in window) || Notification.permission !== 'granted') return
-    const n = new Notification('⏰ Order running late', {
+    showDeviceNotification('⏰ Order running late', {
       body: `Order ${orderCode(order)} has passed its prep time. Mark it ready or add time.`,
       tag: `late-${order.id}${nonce ? `-${nonce}` : ''}`,
       requireInteraction: true,
+      url: `/orders?order=${order.id}`,
     })
-    n.onclick = () => { try { window.focus() } catch { /* ignore */ } n.close() }
   } catch {
     /* notifications unavailable — silently ignore */
   }
@@ -484,17 +487,6 @@ function barcodeFoot(order, caption) {
     <div class="center small">${orderCodeHtml(order)}</div>`
 }
 
-// Try to surface any customer instruction stored on the order.
-function customerNote(order) {
-  return (
-    order.customer_notes ||
-    order.notes ||
-    order.special_instructions ||
-    order.delivery_address?.notes ||
-    ''
-  )
-}
-
 // Kitchen Order Ticket — mirrors the thermal KOT layout.
 function buildKotHtml(order) {
   const placed = new Date(order.created_at)
@@ -519,7 +511,7 @@ function buildKotHtml(order) {
         </tr>`
     })
     .join('')
-  const note = customerNote(order)
+  const note = orderNote(order)
   return `
     <div class="ticket">
       ${outletHead(false)}
@@ -821,6 +813,9 @@ export default function Orders() {
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(null)
   const [selectedOrderId, setSelectedOrderId] = useState(null)
+  // Phones show the list OR the open order, not both side by side. True while
+  // the order detail is the one on screen; desktop ignores it.
+  const [mobileDetail, setMobileDetail] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [activeTab, setActiveTab] = useState('pending') // 'pending', 'preparing', 'ready'
   const [checkedItems, setCheckedItems] = useState(new Set())
@@ -1103,6 +1098,7 @@ export default function Orders() {
     const tab = getTabForOrder(target)
     if (['pending', 'preparing', 'ready'].includes(tab)) setActiveTab(tab)
     setSelectedOrderId(focusOrderId)
+    setMobileDetail(true)
     setSearchParams({}, { replace: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusOrderId, orders])
@@ -1732,7 +1728,7 @@ export default function Orders() {
       : 'Temporarily Closed'
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-canvas">
+    <div className="flex h-full flex-col overflow-hidden bg-canvas">
       {/* Topbar */}
       <Topbar>
         <div className="flex items-center gap-3">
@@ -1741,7 +1737,7 @@ export default function Orders() {
             <span className="h-1.5 w-1.5 rounded-full bg-brand" /> Live Dashboard
           </span>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <OutletSwitcher />
           <button
             type="button"
@@ -1811,7 +1807,7 @@ export default function Orders() {
       {/* Main Dual Column Wrapper */}
       <div className="flex flex-1 overflow-hidden">
         {/* Left Column: Master List */}
-        <div className="flex w-[400px] shrink-0 flex-col border-r border-line bg-white">
+        <div className={`${mobileDetail ? 'hidden' : 'flex'} w-full shrink-0 flex-col border-r border-line bg-white lg:flex lg:w-[400px]`}>
           {/* Search bar inside sidebar */}
           <div className="p-4 border-b border-line">
             <div className="relative">
@@ -1946,7 +1942,7 @@ export default function Orders() {
                 return (
                   <div
                     key={o.id}
-                    onClick={() => setSelectedOrderId(o.id)}
+                    onClick={() => { setSelectedOrderId(o.id); setMobileDetail(true) }}
                     className={`group relative flex cursor-pointer flex-col gap-2 p-4 text-left transition-all hover:bg-canvas/50 ${
                       isAlarming ? 'animate-alarm-row ' : ''
                     }${
@@ -1998,6 +1994,14 @@ export default function Orders() {
                         {items.map((it) => `${it.quantity}× ${it.products?.name || 'Item'}`).join(', ')}
                       </span>
                     </div>
+
+                    {/* Customer's order note */}
+                    {orderNote(o) && (
+                      <div className="flex items-start gap-1.5 rounded-md bg-amber-50 px-2 py-1 text-xs text-[#92400e]">
+                        <MessageSquareText className="mt-px h-3.5 w-3.5 shrink-0" />
+                        <span className="line-clamp-2 min-w-0 font-semibold">{orderNote(o)}</span>
+                      </div>
+                    )}
 
                     <div className="mt-1 flex items-center justify-between gap-2">
                       <div className="flex flex-wrap items-center gap-1">
@@ -2058,14 +2062,22 @@ export default function Orders() {
         </div>
 
         {/* Right Column: Order Detail View */}
-        <div className="flex flex-1 flex-col bg-canvas overflow-y-auto">
+        <div className={`${mobileDetail ? 'flex' : 'hidden'} flex-1 flex-col bg-canvas overflow-y-auto lg:flex`}>
+          {/* Phone only: back to the order list. */}
+          <button
+            type="button"
+            onClick={() => setMobileDetail(false)}
+            className="sticky top-0 z-10 flex items-center gap-1.5 border-b border-line bg-white px-4 py-3 text-sm font-semibold text-brand lg:hidden"
+          >
+            <ChevronLeft className="h-4 w-4" /> All orders
+          </button>
           {selectedOrder ? (
             <div className="flex flex-col min-h-full">
               {/* Header Details */}
-              <div className="border-b border-line bg-white p-6 shadow-sm">
-                <div className="flex items-start justify-between">
+              <div className="border-b border-line bg-white p-4 shadow-sm lg:p-6">
+                <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <div className="flex items-center gap-3">
+                    <div className="flex flex-wrap items-center gap-2 lg:gap-3">
                       <h2 className="text-xl font-bold text-ink">
                         Order <OrderIdLabel order={selectedOrder} />
                       </h2>
@@ -2122,9 +2134,11 @@ export default function Orders() {
               </div>
 
               {/* Grid content */}
-              <div className="grid flex-1 grid-cols-1 lg:grid-cols-3 gap-6 p-6">
+              <div className="grid flex-1 grid-cols-1 lg:grid-cols-3 gap-4 p-4 lg:gap-6 lg:p-6">
                 {/* Left col: Customer, Dispatch & Payments */}
                 <div className="lg:col-span-2 space-y-6">
+                  <OrderNote order={selectedOrder} />
+
                   {/* Kitchen Checklist Card */}
                   <div className="rounded-xl border border-line bg-white p-5 shadow-sm">
                     <div className="flex justify-between items-center mb-1">

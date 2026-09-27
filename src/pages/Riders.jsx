@@ -880,7 +880,7 @@ export default function Riders() {
         <div className="flex items-center gap-2">
           <SearchBox
             placeholder="Search name, phone, vehicle…"
-            className="w-[260px]"
+            className="w-full sm:w-[260px]"
             value={searchQuery}
             onChange={setSearchQuery}
           />
@@ -895,7 +895,7 @@ export default function Riders() {
         </div>
       </Topbar>
 
-      <div className="space-y-6 p-8">
+      <div className="space-y-6 p-4 lg:p-8">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="text-sm text-ink-soft">
             Rider performance for <span className="font-semibold text-ink">{label}</span>
@@ -910,7 +910,7 @@ export default function Riders() {
           </div>
         )}
 
-        <div className="grid grid-cols-4 gap-6">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-6">
           {kpis.map((k) => (
             <Kpi key={k.label} {...k} />
           ))}
@@ -927,148 +927,151 @@ export default function Riders() {
             </span>
           </div>
 
-          <table className="w-full text-left">
-            <thead>
-              <tr className="border-y border-line text-[11px] font-semibold uppercase tracking-wide text-ink-soft">
-                <th className="px-5 py-3 font-semibold">Rider</th>
-                <th className="px-5 py-3 font-semibold">Phone</th>
-                <th className="px-5 py-3 font-semibold">Vehicle</th>
-                <th className="px-5 py-3 font-semibold">KYC</th>
-                <th className="px-5 py-3 font-semibold">Status</th>
-                <th className="px-5 py-3 font-semibold">Active</th>
-                <th className="px-5 py-3 font-semibold">Completed</th>
-                <th className="px-5 py-3 font-semibold">Location</th>
-                <th className="px-5 py-3 text-right font-semibold">Last Active</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-line-soft">
-              {loading ? (
-                <tr>
-                  <td colSpan={9} className="px-5 py-12 text-center text-sm text-ink-soft">Loading riders…</td>
+          {/* Scrolls sideways on a phone rather than squashing the columns. */}
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[720px] text-left">
+              <thead>
+                <tr className="border-y border-line text-[11px] font-semibold uppercase tracking-wide text-ink-soft">
+                  <th className="px-5 py-3 font-semibold">Rider</th>
+                  <th className="px-5 py-3 font-semibold">Phone</th>
+                  <th className="px-5 py-3 font-semibold">Vehicle</th>
+                  <th className="px-5 py-3 font-semibold">KYC</th>
+                  <th className="px-5 py-3 font-semibold">Status</th>
+                  <th className="px-5 py-3 font-semibold">Active</th>
+                  <th className="px-5 py-3 font-semibold">Completed</th>
+                  <th className="px-5 py-3 font-semibold">Location</th>
+                  <th className="px-5 py-3 text-right font-semibold">Last Active</th>
                 </tr>
-              ) : visibleRiders.length === 0 ? (
-                <tr>
-                  <td colSpan={9} className="px-5 py-12 text-center text-sm text-ink-soft">
-                    {q
-                      ? 'No riders match your search.'
-                      : 'No riders yet — add one with the button above, or they appear here once a rider claims a ready order in the rider app.'}
-                  </td>
-                </tr>
-              ) : (
-                visibleRiders.map((r) => {
-                  const p = r.profile || {}
-                  const kycDone = !!(p.license_number && p.aadhar_number)
-                  return (
-                    <tr
-                      key={r.id}
-                      onClick={() => { setDetailId(r.id); setRevealAadhaar(false) }}
-                      className="cursor-pointer hover:bg-canvas/60"
-                    >
-                      <td className="px-5 py-4">
-                        <div className="flex items-center gap-3">
-                          {/* The rider's own photo from the app (profiles.avatar_url) */}
-                          {p.avatar_url ? (
-                            <img
-                              src={p.avatar_url}
-                              alt=""
-                              loading="lazy"
-                              decoding="async"
-                              className="h-9 w-9 shrink-0 rounded-full object-cover"
-                            />
-                          ) : (
-                            <span className={`flex h-9 w-9 items-center justify-center rounded-full text-xs font-bold ${toneFor(r.id)}`}>
-                              {initials(r.name)}
-                            </span>
-                          )}
-                          <div>
-                            <p className="text-sm font-semibold text-ink">{r.name}</p>
-                            <p className="text-xs text-ink-soft">{r.completed} delivered · ₹{r.earned.toLocaleString('en-IN')}</p>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-5 py-4">
-                        {r.phone ? (
-                          <a
-                            href={`tel:${r.phone}`}
-                            onClick={(e) => e.stopPropagation()}
-                            className="flex items-center gap-1.5 text-sm text-ink hover:text-brand"
-                          >
-                            <Phone className="h-3.5 w-3.5 text-ink-soft" /> {r.phone}
-                          </a>
-                        ) : (
-                          <span className="text-sm text-ink-soft">—</span>
-                        )}
-                      </td>
-                      <td className="px-5 py-4">
-                        {p.vehicle_registration_number || p.vehicle_model ? (
-                          <div className="text-xs">
-                            {p.vehicle_registration_number && (
-                              <span className="rounded border border-line bg-canvas px-1.5 py-0.5 font-mono font-semibold text-ink">
-                                {p.vehicle_registration_number}
+              </thead>
+              <tbody className="divide-y divide-line-soft">
+                {loading ? (
+                  <tr>
+                    <td colSpan={9} className="px-5 py-12 text-center text-sm text-ink-soft">Loading riders…</td>
+                  </tr>
+                ) : visibleRiders.length === 0 ? (
+                  <tr>
+                    <td colSpan={9} className="px-5 py-12 text-center text-sm text-ink-soft">
+                      {q
+                        ? 'No riders match your search.'
+                        : 'No riders yet — add one with the button above, or they appear here once a rider claims a ready order in the rider app.'}
+                    </td>
+                  </tr>
+                ) : (
+                  visibleRiders.map((r) => {
+                    const p = r.profile || {}
+                    const kycDone = !!(p.license_number && p.aadhar_number)
+                    return (
+                      <tr
+                        key={r.id}
+                        onClick={() => { setDetailId(r.id); setRevealAadhaar(false) }}
+                        className="cursor-pointer hover:bg-canvas/60"
+                      >
+                        <td className="px-5 py-4">
+                          <div className="flex items-center gap-3">
+                            {/* The rider's own photo from the app (profiles.avatar_url) */}
+                            {p.avatar_url ? (
+                              <img
+                                src={p.avatar_url}
+                                alt=""
+                                loading="lazy"
+                                decoding="async"
+                                className="h-9 w-9 shrink-0 rounded-full object-cover"
+                              />
+                            ) : (
+                              <span className={`flex h-9 w-9 items-center justify-center rounded-full text-xs font-bold ${toneFor(r.id)}`}>
+                                {initials(r.name)}
                               </span>
                             )}
-                            <p className="mt-1 text-ink-soft">
-                              {[p.vehicle_model, p.vehicle_color].filter(Boolean).join(' · ') ||
-                                normalizeVehicleType(p.vehicle_type) || '—'}
-                            </p>
+                            <div>
+                              <p className="text-sm font-semibold text-ink">{r.name}</p>
+                              <p className="text-xs text-ink-soft">{r.completed} delivered · ₹{r.earned.toLocaleString('en-IN')}</p>
+                            </div>
                           </div>
-                        ) : (
-                          <span className="text-sm text-line-2">—</span>
-                        )}
-                      </td>
-                      <td className="px-5 py-4">
-                        {kycDone ? (
-                          <span className="inline-flex items-center gap-1 rounded-full bg-pos-soft px-2 py-0.5 text-[11px] font-semibold text-pos-dark">
-                            <ShieldCheck className="h-3 w-3" /> Verified
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 rounded-full bg-[#fef3c7] px-2 py-0.5 text-[11px] font-semibold text-[#b45309]">
-                            <ShieldAlert className="h-3 w-3" /> Incomplete
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-5 py-4">
-                        <StatusBadge onDelivery={r.active > 0} locStatus={r.locStatus} />
-                      </td>
-                      <td className="px-5 py-4 text-sm font-semibold text-ink">{r.active}</td>
-                      <td className="px-5 py-4 text-sm font-semibold text-ink">{r.completed}</td>
-                      <td className="px-5 py-4">
-                        {r.loc ? (
-                          // With a Maps key the pin opens the map in-dashboard;
-                          // without one it falls back to the Google Maps link.
-                          hasMapsKey() ? (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                setMapRiderId(r.id)
-                              }}
-                              className="inline-flex items-center gap-1 text-sm font-semibold text-info hover:underline"
-                            >
-                              <MapPin className="h-3.5 w-3.5" /> Live pin
-                            </button>
-                          ) : (
+                        </td>
+                        <td className="px-5 py-4">
+                          {r.phone ? (
                             <a
-                              href={gmapsLink(r.loc.latitude, r.loc.longitude)}
-                              target="_blank"
-                              rel="noreferrer"
+                              href={`tel:${r.phone}`}
                               onClick={(e) => e.stopPropagation()}
-                              className="inline-flex items-center gap-1 text-sm font-semibold text-info hover:underline"
+                              className="flex items-center gap-1.5 text-sm text-ink hover:text-brand"
                             >
-                              <MapPin className="h-3.5 w-3.5" /> Live pin <ExternalLink className="h-3 w-3" />
+                              <Phone className="h-3.5 w-3.5 text-ink-soft" /> {r.phone}
                             </a>
-                          )
-                        ) : (
-                          <span className="text-sm text-ink-soft">—</span>
-                        )}
-                      </td>
-                      <td className="px-5 py-4 text-right text-sm font-semibold text-ink-soft">{ago(r.lastAt)}</td>
-                    </tr>
-                  )
-                })
-              )}
-            </tbody>
-          </table>
+                          ) : (
+                            <span className="text-sm text-ink-soft">—</span>
+                          )}
+                        </td>
+                        <td className="px-5 py-4">
+                          {p.vehicle_registration_number || p.vehicle_model ? (
+                            <div className="text-xs">
+                              {p.vehicle_registration_number && (
+                                <span className="rounded border border-line bg-canvas px-1.5 py-0.5 font-mono font-semibold text-ink">
+                                  {p.vehicle_registration_number}
+                                </span>
+                              )}
+                              <p className="mt-1 text-ink-soft">
+                                {[p.vehicle_model, p.vehicle_color].filter(Boolean).join(' · ') ||
+                                  normalizeVehicleType(p.vehicle_type) || '—'}
+                              </p>
+                            </div>
+                          ) : (
+                            <span className="text-sm text-line-2">—</span>
+                          )}
+                        </td>
+                        <td className="px-5 py-4">
+                          {kycDone ? (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-pos-soft px-2 py-0.5 text-[11px] font-semibold text-pos-dark">
+                              <ShieldCheck className="h-3 w-3" /> Verified
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-[#fef3c7] px-2 py-0.5 text-[11px] font-semibold text-[#b45309]">
+                              <ShieldAlert className="h-3 w-3" /> Incomplete
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-5 py-4">
+                          <StatusBadge onDelivery={r.active > 0} locStatus={r.locStatus} />
+                        </td>
+                        <td className="px-5 py-4 text-sm font-semibold text-ink">{r.active}</td>
+                        <td className="px-5 py-4 text-sm font-semibold text-ink">{r.completed}</td>
+                        <td className="px-5 py-4">
+                          {r.loc ? (
+                            // With a Maps key the pin opens the map in-dashboard;
+                            // without one it falls back to the Google Maps link.
+                            hasMapsKey() ? (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  setMapRiderId(r.id)
+                                }}
+                                className="inline-flex items-center gap-1 text-sm font-semibold text-info hover:underline"
+                              >
+                                <MapPin className="h-3.5 w-3.5" /> Live pin
+                              </button>
+                            ) : (
+                              <a
+                                href={gmapsLink(r.loc.latitude, r.loc.longitude)}
+                                target="_blank"
+                                rel="noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                                className="inline-flex items-center gap-1 text-sm font-semibold text-info hover:underline"
+                              >
+                                <MapPin className="h-3.5 w-3.5" /> Live pin <ExternalLink className="h-3 w-3" />
+                              </a>
+                            )
+                          ) : (
+                            <span className="text-sm text-ink-soft">—</span>
+                          )}
+                        </td>
+                        <td className="px-5 py-4 text-right text-sm font-semibold text-ink-soft">{ago(r.lastAt)}</td>
+                      </tr>
+                    )
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
 
@@ -1119,7 +1122,7 @@ export default function Riders() {
 
             <div className="flex-1 space-y-5 overflow-y-auto p-5">
               {/* Performance */}
-              <div className="grid grid-cols-4 gap-3 rounded-xl border border-line bg-canvas/40 p-4 text-center">
+              <div className="grid grid-cols-2 gap-3 rounded-xl border border-line bg-canvas/40 p-4 text-center sm:grid-cols-4">
                 <div>
                   <p className="text-lg font-bold text-ink">{detailRider.active}</p>
                   <p className="text-[10px] font-semibold uppercase text-ink-soft">Active</p>

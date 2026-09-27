@@ -404,7 +404,7 @@ export default function Banners() {
         <TopIcons />
       </Topbar>
 
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="flex-1 overflow-y-auto p-4 lg:p-6">
         <div className="mb-5 flex items-start justify-between gap-4">
           <div>
             <p className="text-sm text-ink-soft">

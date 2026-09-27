@@ -10,3 +10,16 @@ export function orderCode(order) {
   const id = order?.id
   return id ? String(id).replace(/[^a-z0-9]/gi, '').slice(0, 10).toUpperCase() : 'New order'
 }
+
+// The customer's note for the order. `order_note` is the real column; the
+// others are older places a note has been stashed, kept as fallbacks.
+export function orderNote(order) {
+  const note =
+    order?.order_note ||
+    order?.customer_notes ||
+    order?.notes ||
+    order?.special_instructions ||
+    order?.delivery_address?.notes ||
+    ''
+  return String(note).trim()
+}

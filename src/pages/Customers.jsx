@@ -169,7 +169,7 @@ export default function Customers() {
         <div className="flex items-center gap-2">
           <SearchBox
             placeholder="Search customers..."
-            className="w-[260px]"
+            className="w-full sm:w-[260px]"
             value={searchQuery}
             onChange={setSearchQuery}
           />
@@ -177,7 +177,7 @@ export default function Customers() {
         </div>
       </Topbar>
 
-      <div className="space-y-6 p-8">
+      <div className="space-y-6 p-4 lg:p-8">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="text-sm text-ink-soft">
             Showing customers for <span className="font-semibold text-ink">{label}</span>
@@ -185,7 +185,7 @@ export default function Customers() {
           <DateRangeFilter defaultPreset="month" onChange={(r, p) => { setRange(r); setPreset(p) }} />
         </div>
 
-        <div className="grid grid-cols-4 gap-6">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-6">
           {kpis.map((k) => (
             <Kpi key={k.label} {...k} />
           ))}
@@ -199,135 +199,138 @@ export default function Customers() {
             </span>
           </div>
 
-          <table className="w-full text-left">
-            <thead>
-              <tr className="border-y border-line text-[11px] font-semibold uppercase tracking-wide text-ink-soft">
-                <th className="px-5 py-3 font-semibold">Customer</th>
-                <th className="px-5 py-3 font-semibold">Phone</th>
-                <th className="px-5 py-3 font-semibold">Orders</th>
-                <th className="px-5 py-3 font-semibold">Total Spent</th>
-                <th className="px-5 py-3 font-semibold">Avg / Order</th>
-                <th className="px-5 py-3 text-right font-semibold">Last Order</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-line-soft">
-              {loading ? (
-                <tr>
-                  <td colSpan={6} className="px-5 py-12 text-center text-sm text-ink-soft">Loading customers…</td>
+          {/* Scrolls sideways on a phone rather than squashing the columns. */}
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[720px] text-left">
+              <thead>
+                <tr className="border-y border-line text-[11px] font-semibold uppercase tracking-wide text-ink-soft">
+                  <th className="px-5 py-3 font-semibold">Customer</th>
+                  <th className="px-5 py-3 font-semibold">Phone</th>
+                  <th className="px-5 py-3 font-semibold">Orders</th>
+                  <th className="px-5 py-3 font-semibold">Total Spent</th>
+                  <th className="px-5 py-3 font-semibold">Avg / Order</th>
+                  <th className="px-5 py-3 text-right font-semibold">Last Order</th>
                 </tr>
-              ) : visibleCustomers.length === 0 ? (
-                <tr>
-                  <td colSpan={6} className="px-5 py-12 text-center text-sm text-ink-soft">
-                    {q
-                      ? 'No customers match your search.'
-                      : 'No customers in this period — try a wider date range.'}
-                  </td>
-                </tr>
-              ) : (
-                visibleCustomers.map((c, i) => {
-                  const isOpen = expandedKey === c.key
-                  const toggle = () => setExpandedKey((k) => (k === c.key ? null : c.key))
-                  return (
-                  <Fragment key={c.key}>
-                  <tr className={isOpen ? 'bg-canvas/40' : ''}>
-                    <td className="px-5 py-4">
-                      <div className="flex items-center gap-3">
-                        <span className={`flex h-9 w-9 items-center justify-center rounded-full text-xs font-bold ${toneFor(String(c.key))}`}>
-                          {initials(c.name)}
-                        </span>
-                        <div>
+              </thead>
+              <tbody className="divide-y divide-line-soft">
+                {loading ? (
+                  <tr>
+                    <td colSpan={6} className="px-5 py-12 text-center text-sm text-ink-soft">Loading customers…</td>
+                  </tr>
+                ) : visibleCustomers.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-5 py-12 text-center text-sm text-ink-soft">
+                      {q
+                        ? 'No customers match your search.'
+                        : 'No customers in this period — try a wider date range.'}
+                    </td>
+                  </tr>
+                ) : (
+                  visibleCustomers.map((c, i) => {
+                    const isOpen = expandedKey === c.key
+                    const toggle = () => setExpandedKey((k) => (k === c.key ? null : c.key))
+                    return (
+                    <Fragment key={c.key}>
+                    <tr className={isOpen ? 'bg-canvas/40' : ''}>
+                      <td className="px-5 py-4">
+                        <div className="flex items-center gap-3">
+                          <span className={`flex h-9 w-9 items-center justify-center rounded-full text-xs font-bold ${toneFor(String(c.key))}`}>
+                            {initials(c.name)}
+                          </span>
+                          <div>
+                            <button
+                              type="button"
+                              onClick={toggle}
+                              title="Show delivery address"
+                              className="flex items-center gap-1.5 text-left text-sm font-semibold text-ink hover:text-brand"
+                            >
+                              {c.name}
+                              <ChevronDown className={`h-3.5 w-3.5 text-ink-soft transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+                              {i === 0 && c.spent > 0 && (
+                                <span className="inline-flex items-center gap-1 rounded-full bg-[#fef3c7] px-1.5 py-0.5 text-[10px] font-bold uppercase text-[#b45309]">
+                                  <Crown className="h-3 w-3" /> VIP
+                                </span>
+                              )}
+                              {i !== 0 && c.orders > 1 && (
+                                <span className="inline-flex items-center gap-1 rounded-full bg-info-soft px-1.5 py-0.5 text-[10px] font-bold uppercase text-info">
+                                  Repeat
+                                </span>
+                              )}
+                            </button>
+                            {c.cancelled > 0 && (
+                              <p className="text-xs text-ink-soft">{c.cancelled} cancelled</p>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-5 py-4">
+                        {c.phone ? (
                           <button
                             type="button"
                             onClick={toggle}
                             title="Show delivery address"
-                            className="flex items-center gap-1.5 text-left text-sm font-semibold text-ink hover:text-brand"
+                            className="flex items-center gap-1.5 text-sm text-ink hover:text-brand"
                           >
-                            {c.name}
-                            <ChevronDown className={`h-3.5 w-3.5 text-ink-soft transition-transform ${isOpen ? 'rotate-180' : ''}`} />
-                            {i === 0 && c.spent > 0 && (
-                              <span className="inline-flex items-center gap-1 rounded-full bg-[#fef3c7] px-1.5 py-0.5 text-[10px] font-bold uppercase text-[#b45309]">
-                                <Crown className="h-3 w-3" /> VIP
-                              </span>
-                            )}
-                            {i !== 0 && c.orders > 1 && (
-                              <span className="inline-flex items-center gap-1 rounded-full bg-info-soft px-1.5 py-0.5 text-[10px] font-bold uppercase text-info">
-                                Repeat
-                              </span>
-                            )}
+                            <Phone className="h-3.5 w-3.5 text-ink-soft" /> {c.phone}
                           </button>
-                          {c.cancelled > 0 && (
-                            <p className="text-xs text-ink-soft">{c.cancelled} cancelled</p>
-                          )}
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-5 py-4">
-                      {c.phone ? (
-                        <button
-                          type="button"
-                          onClick={toggle}
-                          title="Show delivery address"
-                          className="flex items-center gap-1.5 text-sm text-ink hover:text-brand"
-                        >
-                          <Phone className="h-3.5 w-3.5 text-ink-soft" /> {c.phone}
-                        </button>
-                      ) : (
-                        <span className="text-sm text-ink-soft">—</span>
-                      )}
-                    </td>
-                    <td className="px-5 py-4 text-sm font-semibold text-ink">{c.orders}</td>
-                    <td className="px-5 py-4 text-sm font-semibold text-ink">₹{c.spent.toLocaleString('en-IN')}</td>
-                    <td className="px-5 py-4 text-sm text-ink-soft">
-                      ₹{(c.orders ? Math.round(c.spent / c.orders) : 0).toLocaleString('en-IN')}
-                    </td>
-                    <td className="px-5 py-4 text-right text-sm font-semibold text-ink-soft">{ago(c.lastAt)}</td>
-                  </tr>
-                  {isOpen && (
-                    <tr className="bg-canvas/40">
-                      <td colSpan={6} className="px-5 pb-4 pt-0">
-                        <div className="ml-12 rounded-lg border border-line bg-white p-3 text-xs">
-                          <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-ink-soft">
-                            Delivery Address
-                          </p>
-                          {c.address ? (
-                            <div className="flex items-start justify-between gap-3">
-                              <p className="text-ink-soft">
-                                <MapPin className="mr-1 inline h-3.5 w-3.5 text-ink-soft" />
-                                {c.address}
-                                {c.landmark ? ` (Landmark: ${c.landmark})` : ''}
-                              </p>
-                              <div className="flex shrink-0 items-center gap-2">
-                                {c.phone && (
-                                  <a
-                                    href={`tel:${c.phone}`}
-                                    className="rounded-lg border border-line px-2.5 py-1 font-semibold text-ink hover:border-brand hover:text-brand"
-                                  >
-                                    Call
-                                  </a>
-                                )}
-                                <a
-                                  href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(c.address)}`}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="rounded-lg bg-info-soft px-2.5 py-1 font-semibold text-info hover:opacity-90"
-                                >
-                                  Map
-                                </a>
-                              </div>
-                            </div>
-                          ) : (
-                            <p className="text-ink-soft">No saved address for this customer.</p>
-                          )}
-                        </div>
+                        ) : (
+                          <span className="text-sm text-ink-soft">—</span>
+                        )}
                       </td>
+                      <td className="px-5 py-4 text-sm font-semibold text-ink">{c.orders}</td>
+                      <td className="px-5 py-4 text-sm font-semibold text-ink">₹{c.spent.toLocaleString('en-IN')}</td>
+                      <td className="px-5 py-4 text-sm text-ink-soft">
+                        ₹{(c.orders ? Math.round(c.spent / c.orders) : 0).toLocaleString('en-IN')}
+                      </td>
+                      <td className="px-5 py-4 text-right text-sm font-semibold text-ink-soft">{ago(c.lastAt)}</td>
                     </tr>
-                  )}
-                  </Fragment>
-                  )
-                })
-              )}
-            </tbody>
-          </table>
+                    {isOpen && (
+                      <tr className="bg-canvas/40">
+                        <td colSpan={6} className="px-5 pb-4 pt-0">
+                          <div className="ml-12 rounded-lg border border-line bg-white p-3 text-xs">
+                            <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-ink-soft">
+                              Delivery Address
+                            </p>
+                            {c.address ? (
+                              <div className="flex items-start justify-between gap-3">
+                                <p className="text-ink-soft">
+                                  <MapPin className="mr-1 inline h-3.5 w-3.5 text-ink-soft" />
+                                  {c.address}
+                                  {c.landmark ? ` (Landmark: ${c.landmark})` : ''}
+                                </p>
+                                <div className="flex shrink-0 items-center gap-2">
+                                  {c.phone && (
+                                    <a
+                                      href={`tel:${c.phone}`}
+                                      className="rounded-lg border border-line px-2.5 py-1 font-semibold text-ink hover:border-brand hover:text-brand"
+                                    >
+                                      Call
+                                    </a>
+                                  )}
+                                  <a
+                                    href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(c.address)}`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="rounded-lg bg-info-soft px-2.5 py-1 font-semibold text-info hover:opacity-90"
+                                  >
+                                    Map
+                                  </a>
+                                </div>
+                              </div>
+                            ) : (
+                              <p className="text-ink-soft">No saved address for this customer.</p>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                    </Fragment>
+                    )
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     </>

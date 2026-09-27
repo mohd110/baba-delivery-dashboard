@@ -415,7 +415,7 @@ export default function Staff() {
         </div>
       </Topbar>
 
-      <div className="space-y-6 p-8">
+      <div className="space-y-6 p-4 lg:p-8">
         {needsMigration && (
           <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />

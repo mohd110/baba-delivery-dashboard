@@ -417,7 +417,7 @@ export default function Reports() {
         </div>
       </Topbar>
 
-      <div className="space-y-6 p-8">
+      <div className="space-y-6 p-4 lg:p-8">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="text-sm text-ink-soft">
             Showing analytics for <span className="font-semibold text-ink">{label}</span>
@@ -425,7 +425,7 @@ export default function Reports() {
           <DateRangeFilter defaultPreset="month" onChange={(r, p) => { setRange(r); setPreset(p) }} />
         </div>
 
-        <div className="grid grid-cols-4 gap-6">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-6">
           {kpis.map((k) => (
             <Kpi key={k.label} {...k} />
           ))}
@@ -439,7 +439,7 @@ export default function Reports() {
           <>
             <RevenueChart data={daily} />
 
-            <div className="grid grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-3 lg:gap-6">
               <DonutCard title="Orders by status" segments={statusSegs} centerLabel="Orders" />
               <DonutCard title="Payment status" segments={paymentSegs} centerLabel="Orders" />
               <TopItems items={topItems} />

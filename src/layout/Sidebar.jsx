@@ -1,6 +1,6 @@
 import { NavLink } from 'react-router-dom'
 import { useState, useEffect } from 'react'
-import { LogOut, ChevronDown, ChevronUp, ShieldCheck } from 'lucide-react'
+import { LogOut, ChevronDown, ChevronUp, ShieldCheck, X } from 'lucide-react'
 import { useAuth } from '../lib/AuthContext.jsx'
 import { supabase } from '../lib/supabase.js'
 import { NAV_MAIN, NAV_ADMIN } from '../lib/permissions.js'
@@ -46,7 +46,10 @@ function AdminNavItem({ to, label, icon: Icon }) {
   )
 }
 
-export default function Sidebar() {
+/* On a desktop the sidebar is always there. On a phone it's a drawer: `open`
+ * slides it in over the page, and `onClose` is called by the backdrop, the
+ * close button and any link inside it. */
+export default function Sidebar({ open = false, onClose = () => {} }) {
   const { user, signOut, can, isAdmin } = useAuth()
   // Badges count the outlet you're looking at, not the whole chain.
   const { scopeId, scopeLabel, outlets } = useOutletScope()
@@ -117,100 +120,120 @@ export default function Sidebar() {
   }
 
   return (
-    <aside className="flex h-full w-[260px] shrink-0 flex-col justify-between border-r border-line bg-white py-6 shadow-[1px_0_1px_rgba(0,0,0,0.05)]">
-      {/* Logo */}
-      <div className="flex items-center gap-3 px-6 pb-6">
-        <img
-          src="/assets/wali-baba-logo.png"
-          onError={(e) => {
-            if (!e.currentTarget.dataset.triedFallback) {
-              e.currentTarget.dataset.triedFallback = 'true'
-              e.currentTarget.src = '/assets/walibaba logo.jpeg'
-            }
-          }}
-          alt="Wali Baba Foods"
-          className="h-20 w-20 shrink-0 object-contain"
-        />
-        <div className="flex flex-col overflow-hidden">
-          <p className="text-[20px] font-bold leading-[24px] tracking-tight text-brand [word-break:break-word]">
-            Wali Baba Foods
-          </p>
-          <p className="text-[10px] font-semibold uppercase leading-4 tracking-[1.2px] text-ink-soft">
-            Delivery Admin
-          </p>
-        </div>
-      </div>
-
-      {/* Nav */}
-      <nav className="flex flex-1 flex-col items-center gap-1 overflow-y-auto px-2 pt-1">
-        <div className="space-y-1">
-          {mainNav.map((item) => (
-            <NavItem
-              key={item.key}
-              to={item.path}
-              label={item.label}
-              icon={item.icon}
-              badge={badgeFor(item.key)}
-            />
-          ))}
-        </div>
-
-        {/* Collapsible Administrative Section */}
-        {adminNav.length > 0 && (
-          <div className="mt-4 w-[243px] border-t border-line pt-4">
-            <button
-              onClick={() => setShowAdmin(!showAdmin)}
-              className="flex w-full items-center justify-between px-3 py-2 text-xs font-semibold uppercase tracking-wider text-ink-soft hover:text-ink transition-colors"
-            >
-              <span>Administration</span>
-              {showAdmin ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3.5 w-3.5" />}
-            </button>
-
-            {showAdmin && (
-              <div className="mt-2 space-y-1 pl-1 transition-all duration-300">
-                {adminNav.map((item) => (
-                  <AdminNavItem key={item.key} to={item.path} label={item.label} icon={item.icon} />
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-      </nav>
-
-      {/* Profile */}
-      <div className="px-6 pt-4">
-        <div className="flex items-center gap-3 rounded-xl bg-line-soft p-4">
+    <>
+      {/* Phone-only backdrop behind the open drawer. */}
+      {open && (
+        <div className="fixed inset-0 z-40 bg-black/40 lg:hidden" onClick={onClose} aria-hidden="true" />
+      )}
+      <aside
+        // Any tap on a link inside navigates away, so it should also put the drawer away.
+        onClick={(e) => { if (e.target.closest('a')) onClose() }}
+        className={`fixed inset-y-0 left-0 z-50 flex h-full w-[260px] shrink-0 flex-col justify-between border-r border-line bg-white py-6 shadow-[1px_0_1px_rgba(0,0,0,0.05)] transition-transform duration-200 lg:static lg:z-auto lg:translate-x-0 ${
+          open ? 'translate-x-0' : '-translate-x-full'
+        }`}
+      >
+        <button
+          type="button"
+          onClick={onClose}
+          title="Close menu"
+          className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-lg text-ink-soft hover:bg-line-soft lg:hidden"
+        >
+          <X className="h-5 w-5" />
+        </button>
+        {/* Logo */}
+        <div className="flex items-center gap-3 px-6 pb-6">
           <img
-            src="/assets/profile.png"
-            alt=""
-            className="h-10 w-10 shrink-0 rounded-full bg-line-2 object-cover"
+            src="/assets/wali-baba-logo.png"
+            onError={(e) => {
+              if (!e.currentTarget.dataset.triedFallback) {
+                e.currentTarget.dataset.triedFallback = 'true'
+                e.currentTarget.src = '/assets/walibaba logo.jpeg'
+              }
+            }}
+            alt="Wali Baba Foods"
+            className="h-20 w-20 shrink-0 object-contain"
           />
           <div className="flex flex-col overflow-hidden">
-            <p className="truncate text-sm font-bold text-ink">{name}</p>
-            <p className="truncate text-xs text-ink-soft">{email}</p>
-            <span className="mt-0.5 w-fit rounded-full bg-white px-1.5 py-px text-[9px] font-bold uppercase tracking-wide text-ink-soft">
-              {isAdmin ? 'Owner · Admin' : 'Staff'}
-              {outlets.length > 1 && ` · ${scopeLabel}`}
-            </span>
-          </div>
-          <div className="ml-auto flex shrink-0 flex-col items-center gap-2">
-            <button
-              onClick={signOut}
-              title="Sign out"
-              className="text-ink-soft hover:text-brand"
-            >
-              <LogOut className="h-4 w-4" />
-            </button>
-            {/* Straight to user management from the profile card — the owner
-                manages staff logins far more often than anything else here. */}
-            {can('page.staff') && (
-              <NavLink to="/staff" title="Users & permissions" className="text-ink-soft hover:text-brand">
-                <ShieldCheck className="h-4 w-4" />
-              </NavLink>
-            )}
+            <p className="text-[20px] font-bold leading-[24px] tracking-tight text-brand [word-break:break-word]">
+              Wali Baba Foods
+            </p>
+            <p className="text-[10px] font-semibold uppercase leading-4 tracking-[1.2px] text-ink-soft">
+              Delivery Admin
+            </p>
           </div>
         </div>
-      </div>
-    </aside>
+
+        {/* Nav */}
+        <nav className="flex flex-1 flex-col items-center gap-1 overflow-y-auto px-2 pt-1">
+          <div className="space-y-1">
+            {mainNav.map((item) => (
+              <NavItem
+                key={item.key}
+                to={item.path}
+                label={item.label}
+                icon={item.icon}
+                badge={badgeFor(item.key)}
+              />
+            ))}
+          </div>
+
+          {/* Collapsible Administrative Section */}
+          {adminNav.length > 0 && (
+            <div className="mt-4 w-[243px] border-t border-line pt-4">
+              <button
+                onClick={() => setShowAdmin(!showAdmin)}
+                className="flex w-full items-center justify-between px-3 py-2 text-xs font-semibold uppercase tracking-wider text-ink-soft hover:text-ink transition-colors"
+              >
+                <span>Administration</span>
+                {showAdmin ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3.5 w-3.5" />}
+              </button>
+
+              {showAdmin && (
+                <div className="mt-2 space-y-1 pl-1 transition-all duration-300">
+                  {adminNav.map((item) => (
+                    <AdminNavItem key={item.key} to={item.path} label={item.label} icon={item.icon} />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </nav>
+
+        {/* Profile */}
+        <div className="px-6 pt-4">
+          <div className="flex items-center gap-3 rounded-xl bg-line-soft p-4">
+            <img
+              src="/assets/profile.png"
+              alt=""
+              className="h-10 w-10 shrink-0 rounded-full bg-line-2 object-cover"
+            />
+            <div className="flex flex-col overflow-hidden">
+              <p className="truncate text-sm font-bold text-ink">{name}</p>
+              <p className="truncate text-xs text-ink-soft">{email}</p>
+              <span className="mt-0.5 w-fit rounded-full bg-white px-1.5 py-px text-[9px] font-bold uppercase tracking-wide text-ink-soft">
+                {isAdmin ? 'Owner · Admin' : 'Staff'}
+                {outlets.length > 1 && ` · ${scopeLabel}`}
+              </span>
+            </div>
+            <div className="ml-auto flex shrink-0 flex-col items-center gap-2">
+              <button
+                onClick={signOut}
+                title="Sign out"
+                className="text-ink-soft hover:text-brand"
+              >
+                <LogOut className="h-4 w-4" />
+              </button>
+              {/* Straight to user management from the profile card — the owner
+                  manages staff logins far more often than anything else here. */}
+              {can('page.staff') && (
+                <NavLink to="/staff" title="Users & permissions" className="text-ink-soft hover:text-brand">
+                  <ShieldCheck className="h-4 w-4" />
+                </NavLink>
+              )}
+            </div>
+          </div>
+        </div>
+      </aside>
+    </>
   )
 }

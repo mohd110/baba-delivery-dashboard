@@ -322,7 +322,7 @@ export default function Overview() {
           <ProfileChip name="Wali Baba Foods" sub="Delivery Admin" />
         </div>
       </Topbar>
-      <div className="relative p-8">
+      <div className="relative p-4 lg:p-8">
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>
@@ -344,7 +344,7 @@ export default function Overview() {
       </div>
 
       {/* KPI grid */}
-      <div className="mt-6 grid grid-cols-4 gap-6">
+      <div className="mt-6 grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-6">
         {kpis.map((k) => (
           <KpiCard key={k.label} {...k} />
         ))}
@@ -395,7 +395,7 @@ export default function Overview() {
       </div>
 
       {/* Bottom bento (live order pipeline) */}
-      <div className="mt-6 grid grid-cols-3 gap-6">
+      <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-3 lg:gap-6">
         {bottomCards.map((c) => (
           <BottomCard key={c.label} {...c} />
         ))}

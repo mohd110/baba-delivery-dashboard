@@ -270,7 +270,7 @@ export default function Offers() {
         </div>
       </Topbar>
 
-      <div className="flex-1 space-y-6 overflow-y-auto p-6">
+      <div className="flex-1 space-y-6 overflow-y-auto p-4 lg:p-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <p className="text-sm text-ink-soft">
@@ -301,7 +301,7 @@ export default function Offers() {
           </div>
         )}
 
-        <div className="grid grid-cols-4 gap-6">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-6">
           <Kpi
             label="Live offers"
             value={loading ? '—' : totals.active}
@@ -333,138 +333,141 @@ export default function Offers() {
         </div>
 
         <div className="rounded-xl border border-line bg-white">
-          <table className="w-full text-left">
-            <thead>
-              <tr className="border-b border-line text-[11px] font-semibold uppercase tracking-wide text-ink-soft">
-                <th className="px-5 py-3 font-semibold">Order</th>
-                <th className="px-5 py-3 font-semibold">Code</th>
-                <th className="px-5 py-3 font-semibold">Offer</th>
-                <th className="px-5 py-3 font-semibold">Min order</th>
-                <th className="px-5 py-3 font-semibold">Who can use it</th>
-                <th className="px-5 py-3 font-semibold">Used</th>
-                <th className="px-5 py-3 text-right font-semibold">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-line-soft">
-              {loading ? (
-                <tr><td colSpan={7} className="px-5 py-12 text-center text-sm text-ink-soft">Loading offers…</td></tr>
-              ) : visible.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="px-5 py-12 text-center text-sm text-ink-soft">
-                    {q
-                      ? 'No offer matches that search.'
-                      : loadError
-                        ? 'Run the migration above, then reload this page.'
-                        : 'No offers yet — create one and it’s live at checkout straight away.'}
-                  </td>
+          {/* Scrolls sideways on a phone rather than squashing the columns. */}
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[720px] text-left">
+              <thead>
+                <tr className="border-b border-line text-[11px] font-semibold uppercase tracking-wide text-ink-soft">
+                  <th className="px-5 py-3 font-semibold">Order</th>
+                  <th className="px-5 py-3 font-semibold">Code</th>
+                  <th className="px-5 py-3 font-semibold">Offer</th>
+                  <th className="px-5 py-3 font-semibold">Min order</th>
+                  <th className="px-5 py-3 font-semibold">Who can use it</th>
+                  <th className="px-5 py-3 font-semibold">Used</th>
+                  <th className="px-5 py-3 text-right font-semibold">Actions</th>
                 </tr>
-              ) : (
-                visible.map((c, i) => {
-                  const rule = USAGE_RULE_BY_ID[usageRuleOf(c)]
-                  const s = statsFor(c.code)
-                  const isDefault = c.is_active && c.code === defaultCode
-                  const canUp = i > 0 && visible[i - 1]?.is_active === c.is_active
-                  const canDown = i < visible.length - 1 && visible[i + 1]?.is_active === c.is_active
-                  return (
-                    <tr key={c.id} className={c.is_active ? '' : 'bg-canvas/40 opacity-60'}>
-                      <td className="px-5 py-4">
-                        <div className="flex items-center gap-2">
-                          <span className="w-6 text-xs font-bold text-ink-soft">{c.sort_order ?? '—'}</span>
-                          <div className="flex flex-col">
+              </thead>
+              <tbody className="divide-y divide-line-soft">
+                {loading ? (
+                  <tr><td colSpan={7} className="px-5 py-12 text-center text-sm text-ink-soft">Loading offers…</td></tr>
+                ) : visible.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="px-5 py-12 text-center text-sm text-ink-soft">
+                      {q
+                        ? 'No offer matches that search.'
+                        : loadError
+                          ? 'Run the migration above, then reload this page.'
+                          : 'No offers yet — create one and it’s live at checkout straight away.'}
+                    </td>
+                  </tr>
+                ) : (
+                  visible.map((c, i) => {
+                    const rule = USAGE_RULE_BY_ID[usageRuleOf(c)]
+                    const s = statsFor(c.code)
+                    const isDefault = c.is_active && c.code === defaultCode
+                    const canUp = i > 0 && visible[i - 1]?.is_active === c.is_active
+                    const canDown = i < visible.length - 1 && visible[i + 1]?.is_active === c.is_active
+                    return (
+                      <tr key={c.id} className={c.is_active ? '' : 'bg-canvas/40 opacity-60'}>
+                        <td className="px-5 py-4">
+                          <div className="flex items-center gap-2">
+                            <span className="w-6 text-xs font-bold text-ink-soft">{c.sort_order ?? '—'}</span>
+                            <div className="flex flex-col">
+                              <button
+                                type="button"
+                                disabled={!canUp || busyId === c.id || !!q}
+                                onClick={() => move(i, -1)}
+                                title={q ? 'Clear the search to reorder' : 'Show earlier'}
+                                className="rounded border border-line px-1 text-ink-soft hover:border-brand hover:text-brand disabled:opacity-30"
+                              >
+                                <ArrowUp className="h-3 w-3" />
+                              </button>
+                              <button
+                                type="button"
+                                disabled={!canDown || busyId === c.id || !!q}
+                                onClick={() => move(i, 1)}
+                                title={q ? 'Clear the search to reorder' : 'Show later'}
+                                className="mt-0.5 rounded border border-line px-1 text-ink-soft hover:border-brand hover:text-brand disabled:opacity-30"
+                              >
+                                <ArrowDown className="h-3 w-3" />
+                              </button>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-5 py-4">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="rounded-md bg-line-soft px-2 py-1 font-mono text-xs font-bold tracking-wider text-ink">
+                              {c.code}
+                            </span>
+                            {isDefault && (
+                              <span
+                                title="Lowest position of the live offers — customers see this one already applied, as long as their cart meets its minimum."
+                                className="inline-flex items-center gap-1 rounded-full bg-[#fef3c7] px-1.5 py-0.5 text-[10px] font-bold uppercase text-[#b45309]"
+                              >
+                                <Sparkles className="h-3 w-3" /> Applied first
+                              </span>
+                            )}
+                            {!c.is_active && (
+                              <span className="rounded-full bg-line-2 px-1.5 py-0.5 text-[10px] font-bold uppercase text-ink-soft">
+                                Off
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-5 py-4">
+                          <p className="text-sm font-semibold text-ink">{offerSummary(c)}</p>
+                          {c.description && <p className="mt-0.5 text-xs text-ink-soft">“{c.description}”</p>}
+                        </td>
+                        <td className="px-5 py-4 text-sm text-ink-soft">
+                          {Number(c.min_order_value) > 0 ? rupees(c.min_order_value) : 'None'}
+                        </td>
+                        <td className="px-5 py-4">
+                          <span className="text-sm text-ink" title={rule.hint}>{rule.short}</span>
+                        </td>
+                        <td className="px-5 py-4">
+                          <p className="text-sm font-semibold text-ink">{s.redemptions.toLocaleString('en-IN')}</p>
+                          <p
+                            className="text-xs text-ink-soft"
+                            title={s.cancelled ? `${s.cancelled} of those orders were cancelled and aren’t counted in the rupees.` : undefined}
+                          >
+                            {rupees(s.totalOff)} off{s.cancelled ? ` · ${s.cancelled} cancelled` : ''}
+                          </p>
+                        </td>
+                        <td className="px-5 py-4">
+                          <div className="flex items-center justify-end gap-1">
                             <button
                               type="button"
-                              disabled={!canUp || busyId === c.id || !!q}
-                              onClick={() => move(i, -1)}
-                              title={q ? 'Clear the search to reorder' : 'Show earlier'}
-                              className="rounded border border-line px-1 text-ink-soft hover:border-brand hover:text-brand disabled:opacity-30"
+                              disabled={busyId === c.id}
+                              onClick={() => toggleActive(c)}
+                              className="flex items-center gap-1 rounded-md border border-line px-2 py-1.5 text-[11px] font-semibold text-ink-soft hover:border-brand hover:text-brand disabled:opacity-50"
                             >
-                              <ArrowUp className="h-3 w-3" />
+                              {c.is_active ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                              {c.is_active ? 'Switch off' : 'Switch on'}
                             </button>
                             <button
                               type="button"
-                              disabled={!canDown || busyId === c.id || !!q}
-                              onClick={() => move(i, 1)}
-                              title={q ? 'Clear the search to reorder' : 'Show later'}
-                              className="mt-0.5 rounded border border-line px-1 text-ink-soft hover:border-brand hover:text-brand disabled:opacity-30"
+                              onClick={() => openEdit(c)}
+                              className="flex items-center gap-1 rounded-md border border-line px-2 py-1.5 text-[11px] font-semibold text-ink-soft hover:border-brand hover:text-brand"
                             >
-                              <ArrowDown className="h-3 w-3" />
+                              <Pencil className="h-3.5 w-3.5" /> Edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => remove(c)}
+                              title="Delete"
+                              className="rounded-md border border-red-200 p-1.5 text-red-400 hover:border-red-400 hover:bg-red-50 hover:text-red-600"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
                             </button>
                           </div>
-                        </div>
-                      </td>
-                      <td className="px-5 py-4">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="rounded-md bg-line-soft px-2 py-1 font-mono text-xs font-bold tracking-wider text-ink">
-                            {c.code}
-                          </span>
-                          {isDefault && (
-                            <span
-                              title="Lowest position of the live offers — customers see this one already applied, as long as their cart meets its minimum."
-                              className="inline-flex items-center gap-1 rounded-full bg-[#fef3c7] px-1.5 py-0.5 text-[10px] font-bold uppercase text-[#b45309]"
-                            >
-                              <Sparkles className="h-3 w-3" /> Applied first
-                            </span>
-                          )}
-                          {!c.is_active && (
-                            <span className="rounded-full bg-line-2 px-1.5 py-0.5 text-[10px] font-bold uppercase text-ink-soft">
-                              Off
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="px-5 py-4">
-                        <p className="text-sm font-semibold text-ink">{offerSummary(c)}</p>
-                        {c.description && <p className="mt-0.5 text-xs text-ink-soft">“{c.description}”</p>}
-                      </td>
-                      <td className="px-5 py-4 text-sm text-ink-soft">
-                        {Number(c.min_order_value) > 0 ? rupees(c.min_order_value) : 'None'}
-                      </td>
-                      <td className="px-5 py-4">
-                        <span className="text-sm text-ink" title={rule.hint}>{rule.short}</span>
-                      </td>
-                      <td className="px-5 py-4">
-                        <p className="text-sm font-semibold text-ink">{s.redemptions.toLocaleString('en-IN')}</p>
-                        <p
-                          className="text-xs text-ink-soft"
-                          title={s.cancelled ? `${s.cancelled} of those orders were cancelled and aren’t counted in the rupees.` : undefined}
-                        >
-                          {rupees(s.totalOff)} off{s.cancelled ? ` · ${s.cancelled} cancelled` : ''}
-                        </p>
-                      </td>
-                      <td className="px-5 py-4">
-                        <div className="flex items-center justify-end gap-1">
-                          <button
-                            type="button"
-                            disabled={busyId === c.id}
-                            onClick={() => toggleActive(c)}
-                            className="flex items-center gap-1 rounded-md border border-line px-2 py-1.5 text-[11px] font-semibold text-ink-soft hover:border-brand hover:text-brand disabled:opacity-50"
-                          >
-                            {c.is_active ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                            {c.is_active ? 'Switch off' : 'Switch on'}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => openEdit(c)}
-                            className="flex items-center gap-1 rounded-md border border-line px-2 py-1.5 text-[11px] font-semibold text-ink-soft hover:border-brand hover:text-brand"
-                          >
-                            <Pencil className="h-3.5 w-3.5" /> Edit
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => remove(c)}
-                            title="Delete"
-                            className="rounded-md border border-red-200 p-1.5 text-red-400 hover:border-red-400 hover:bg-red-50 hover:text-red-600"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  )
-                })
-              )}
-            </tbody>
-          </table>
+                        </td>
+                      </tr>
+                    )
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
 

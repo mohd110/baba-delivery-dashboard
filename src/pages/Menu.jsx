@@ -1175,7 +1175,7 @@ export default function Menu() {
       <input ref={photoInputRef} type="file" accept="image/*" className="hidden"
         onChange={(e) => { const f = e.target.files?.[0]; if (f) updateDishPhoto(f); e.target.value = '' }} />
 
-      <div className="space-y-6 p-8">
+      <div className="space-y-6 p-4 lg:p-8">
         {/* ── Header ── */}
         <div className="flex items-start justify-between">
           <div>
@@ -1248,118 +1248,121 @@ export default function Menu() {
           </div>
 
           {/* Table */}
-          <table className="w-full text-left">
-            <thead>
-              <tr className="text-[11px] font-semibold uppercase tracking-wide text-ink-soft">
-                <th className="px-5 py-3">Dish Details</th>
-                <th className="px-5 py-3">Category</th>
-                <th className="px-5 py-3">Price / Variants</th>
-                <th className="px-5 py-3">Status</th>
-                {/* Name the branch in the header the switch lives under, so the
-                    scope is on screen at the moment of clicking it. */}
-                <th className="px-5 py-3">
-                  {perBranch ? `Availability · ${scopeId ? scopeLabel : 'All branches'}` : 'Availability'}
-                </th>
-                <th className="px-5 py-3">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-line-soft">
-              {loading ? (
-                <tr><td colSpan={6} className="px-5 py-12 text-center text-sm text-ink-soft">Loading dishes…</td></tr>
-              ) : visibleProducts.length === 0 ? (
-                <tr><td colSpan={6} className="px-5 py-12 text-center text-sm text-ink-soft">
-                  {q || active !== 'all' ? 'No dishes match this filter.' : 'No dishes found.'}
-                </td></tr>
-              ) : pagedProducts.map((p) => {
-                const variants = Array.isArray(p.variants) ? p.variants.filter(v => v.name) : []
-                const pos = catPos(p)
-                // Availability for the branch in the topbar (see statusOf).
-                const st = statusOf(p)
-                return (
-                  <tr key={p.id} className="hover:bg-line-soft/40 transition-colors">
-                    <td className="px-5 py-4">
-                      <div className="flex items-center gap-3">
-                        <img src={imgFor(p.name, p.photo_url)} alt="" className="h-12 w-12 rounded-lg bg-line-2 object-contain object-center" loading="lazy" decoding="async" />
-                        <div>
-                          <p className="flex items-center gap-1.5 text-sm font-semibold text-ink">
-                            <VegDot veg={productIsVeg(p)} /> {p.name}
-                          </p>
-                          <p className="max-w-[220px] truncate text-xs text-ink-soft">{p.description || '—'}</p>
+          {/* Scrolls sideways on a phone rather than squashing the columns. */}
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[720px] text-left">
+              <thead>
+                <tr className="text-[11px] font-semibold uppercase tracking-wide text-ink-soft">
+                  <th className="px-5 py-3">Dish Details</th>
+                  <th className="px-5 py-3">Category</th>
+                  <th className="px-5 py-3">Price / Variants</th>
+                  <th className="px-5 py-3">Status</th>
+                  {/* Name the branch in the header the switch lives under, so the
+                      scope is on screen at the moment of clicking it. */}
+                  <th className="px-5 py-3">
+                    {perBranch ? `Availability · ${scopeId ? scopeLabel : 'All branches'}` : 'Availability'}
+                  </th>
+                  <th className="px-5 py-3">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-line-soft">
+                {loading ? (
+                  <tr><td colSpan={6} className="px-5 py-12 text-center text-sm text-ink-soft">Loading dishes…</td></tr>
+                ) : visibleProducts.length === 0 ? (
+                  <tr><td colSpan={6} className="px-5 py-12 text-center text-sm text-ink-soft">
+                    {q || active !== 'all' ? 'No dishes match this filter.' : 'No dishes found.'}
+                  </td></tr>
+                ) : pagedProducts.map((p) => {
+                  const variants = Array.isArray(p.variants) ? p.variants.filter(v => v.name) : []
+                  const pos = catPos(p)
+                  // Availability for the branch in the topbar (see statusOf).
+                  const st = statusOf(p)
+                  return (
+                    <tr key={p.id} className="hover:bg-line-soft/40 transition-colors">
+                      <td className="px-5 py-4">
+                        <div className="flex items-center gap-3">
+                          <img src={imgFor(p.name, p.photo_url)} alt="" className="h-12 w-12 rounded-lg bg-line-2 object-contain object-center" loading="lazy" decoding="async" />
+                          <div>
+                            <p className="flex items-center gap-1.5 text-sm font-semibold text-ink">
+                              <VegDot veg={productIsVeg(p)} /> {p.name}
+                            </p>
+                            <p className="max-w-[220px] truncate text-xs text-ink-soft">{p.description || '—'}</p>
+                          </div>
                         </div>
-                      </div>
-                    </td>
-                    <td className="px-5 py-4">
-                      <span className="rounded bg-[#fdf0d5] px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-[#92710e]">
-                        {categoryLabel(p.category, p.name, categories)}
-                      </span>
-                    </td>
-                    <td className="px-5 py-4">
-                      <p className="text-sm font-semibold text-ink">₹{p.price}</p>
-                      {variants.length > 0 && (
-                        <div className="mt-1 space-y-0.5">
-                          {variants.map((v, i) => (
-                            <p key={i} className="text-[11px] text-ink-soft">{v.name} — ₹{v.price}</p>
-                          ))}
-                        </div>
-                      )}
-                    </td>
-                    <td className="px-5 py-4">
-                      <div className="flex flex-col">
-                        <span className={`flex items-center gap-1.5 text-sm font-medium ${st.isAvailable ? 'text-pos' : 'text-brand'}`}>
-                          <span className={`h-1.5 w-1.5 rounded-full ${st.isAvailable ? 'bg-pos' : 'bg-brand'}`} />
-                          {st.isAvailable ? 'Active' : 'Unavailable'}
+                      </td>
+                      <td className="px-5 py-4">
+                        <span className="rounded bg-[#fdf0d5] px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-[#92710e]">
+                          {categoryLabel(p.category, p.name, categories)}
                         </span>
-                        {!st.isAvailable && st.nextAt && (
-                          <span className="mt-1 text-[10px] font-semibold text-ink-soft">
-                            Until {formatFutureTime(st.nextAt)}
-                          </span>
-                        )}
-                        {/* Only on "All outlets", and only when the branches
-                            disagree — otherwise the summary above is the whole
-                            truth and this would just be noise on every row. */}
-                        {st.offAt.length > 0 && (
-                          <span className="mt-1 text-[10px] font-semibold text-brand">
-                            Off at {st.offAt.map((o) => o.label).join(', ')}
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-5 py-4">
-                      <Toggle on={st.isAvailable} disabled={busy.has(p.id)} onChange={() => setAvailability(p.id, !st.isAvailable)} />
-                    </td>
-                    <td className="px-5 py-4">
-                      <div className="flex items-center gap-2">
-                        {canReorder && (
-                          <div className="flex flex-col">
-                            <button type="button" title="Move up" aria-label="Move up"
-                              disabled={reordering || pos.i <= 0}
-                              onClick={() => moveDish(p, -1)}
-                              className="rounded border border-line px-1 text-ink-soft hover:border-brand hover:text-brand disabled:cursor-not-allowed disabled:opacity-30 transition-colors">
-                              <ChevronUp className="h-3 w-3" />
-                            </button>
-                            <button type="button" title="Move down" aria-label="Move down"
-                              disabled={reordering || pos.i >= pos.len - 1}
-                              onClick={() => moveDish(p, 1)}
-                              className="-mt-px rounded border border-line px-1 text-ink-soft hover:border-brand hover:text-brand disabled:cursor-not-allowed disabled:opacity-30 transition-colors">
-                              <ChevronDown className="h-3 w-3" />
-                            </button>
+                      </td>
+                      <td className="px-5 py-4">
+                        <p className="text-sm font-semibold text-ink">₹{p.price}</p>
+                        {variants.length > 0 && (
+                          <div className="mt-1 space-y-0.5">
+                            {variants.map((v, i) => (
+                              <p key={i} className="text-[11px] text-ink-soft">{v.name} — ₹{v.price}</p>
+                            ))}
                           </div>
                         )}
-                        <button type="button" onClick={() => openEdit(p)}
-                          className="flex items-center gap-1.5 rounded-lg border border-line px-2.5 py-1.5 text-[11px] font-semibold text-ink-soft hover:border-brand hover:text-brand transition-colors">
-                          <Pencil className="h-3 w-3" /> Edit
-                        </button>
-                        <button type="button" onClick={() => deleteDish(p.id, p.name)}
-                          className="flex items-center gap-1.5 rounded-lg border border-red-200 px-2.5 py-1.5 text-[11px] font-semibold text-red-400 hover:border-red-400 hover:bg-red-50 hover:text-red-600 transition-colors">
-                          <Trash2 className="h-3 w-3" /> Delete
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+                      </td>
+                      <td className="px-5 py-4">
+                        <div className="flex flex-col">
+                          <span className={`flex items-center gap-1.5 text-sm font-medium ${st.isAvailable ? 'text-pos' : 'text-brand'}`}>
+                            <span className={`h-1.5 w-1.5 rounded-full ${st.isAvailable ? 'bg-pos' : 'bg-brand'}`} />
+                            {st.isAvailable ? 'Active' : 'Unavailable'}
+                          </span>
+                          {!st.isAvailable && st.nextAt && (
+                            <span className="mt-1 text-[10px] font-semibold text-ink-soft">
+                              Until {formatFutureTime(st.nextAt)}
+                            </span>
+                          )}
+                          {/* Only on "All outlets", and only when the branches
+                              disagree — otherwise the summary above is the whole
+                              truth and this would just be noise on every row. */}
+                          {st.offAt.length > 0 && (
+                            <span className="mt-1 text-[10px] font-semibold text-brand">
+                              Off at {st.offAt.map((o) => o.label).join(', ')}
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-5 py-4">
+                        <Toggle on={st.isAvailable} disabled={busy.has(p.id)} onChange={() => setAvailability(p.id, !st.isAvailable)} />
+                      </td>
+                      <td className="px-5 py-4">
+                        <div className="flex items-center gap-2">
+                          {canReorder && (
+                            <div className="flex flex-col">
+                              <button type="button" title="Move up" aria-label="Move up"
+                                disabled={reordering || pos.i <= 0}
+                                onClick={() => moveDish(p, -1)}
+                                className="rounded border border-line px-1 text-ink-soft hover:border-brand hover:text-brand disabled:cursor-not-allowed disabled:opacity-30 transition-colors">
+                                <ChevronUp className="h-3 w-3" />
+                              </button>
+                              <button type="button" title="Move down" aria-label="Move down"
+                                disabled={reordering || pos.i >= pos.len - 1}
+                                onClick={() => moveDish(p, 1)}
+                                className="-mt-px rounded border border-line px-1 text-ink-soft hover:border-brand hover:text-brand disabled:cursor-not-allowed disabled:opacity-30 transition-colors">
+                                <ChevronDown className="h-3 w-3" />
+                              </button>
+                            </div>
+                          )}
+                          <button type="button" onClick={() => openEdit(p)}
+                            className="flex items-center gap-1.5 rounded-lg border border-line px-2.5 py-1.5 text-[11px] font-semibold text-ink-soft hover:border-brand hover:text-brand transition-colors">
+                            <Pencil className="h-3 w-3" /> Edit
+                          </button>
+                          <button type="button" onClick={() => deleteDish(p.id, p.name)}
+                            className="flex items-center gap-1.5 rounded-lg border border-red-200 px-2.5 py-1.5 text-[11px] font-semibold text-red-400 hover:border-red-400 hover:bg-red-50 hover:text-red-600 transition-colors">
+                            <Trash2 className="h-3 w-3" /> Delete
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
 
           <div className="flex flex-wrap items-center justify-between gap-3 p-5">
             <span className="text-sm text-ink-soft">

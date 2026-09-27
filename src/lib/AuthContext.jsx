@@ -1,10 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import { supabase } from './supabase.js'
 import { canWith } from './permissions.js'
-
-/* Absolute session lifetime: 3 hours from sign-in, then auto sign-out. */
-const SESSION_MAX_MS = 3 * 60 * 60 * 1000
-const LOGIN_AT_KEY = 'wb-login-at'
+import { unregisterPush } from './device.js'
 
 /* The columns arrive in two migrations, so loadProfile steps down through them
  * rather than failing outright on a database that hasn't had both run:
@@ -31,7 +28,6 @@ const AuthContext = createContext({
 export function AuthProvider({ children }) {
   const [session, setSession] = useState(null)
   const [loading, setLoading] = useState(true)
-  const timerRef = useRef(null)
   // The signed-in user's own profiles row, tagged with the id it was fetched
   // for. Keeping the id alongside the row is what lets `profile` and
   // `permsLoading` be derived below rather than juggled in the effect — a stale
@@ -39,63 +35,22 @@ export function AuthProvider({ children }) {
   const [loaded, setLoaded] = useState({ userId: null, profile: null })
 
   useEffect(() => {
-    const clearTimer = () => {
-      if (timerRef.current) {
-        clearTimeout(timerRef.current)
-        timerRef.current = null
-      }
-    }
-
-    const forceSignOut = () => {
-      clearTimer()
-      localStorage.removeItem(LOGIN_AT_KEY)
-      supabase.auth.signOut()
-    }
-
-    // Schedule the 3-hour auto-logout (or sign out now if the window already passed).
-    const armExpiry = (active) => {
-      clearTimer()
-      if (!active) return
-      let loginAt = Number(localStorage.getItem(LOGIN_AT_KEY))
-      if (!loginAt) {
-        loginAt = Date.now()
-        localStorage.setItem(LOGIN_AT_KEY, String(loginAt))
-      }
-      const remaining = loginAt + SESSION_MAX_MS - Date.now()
-      if (remaining <= 0) {
-        forceSignOut()
-        return
-      }
-      timerRef.current = setTimeout(forceSignOut, remaining)
-    }
-
     supabase.auth.getSession().then(({ data }) => {
-      const s = data.session ?? null
-      setSession(s)
-      armExpiry(!!s)
+      setSession(data.session ?? null)
       setLoading(false)
     })
 
-    const { data: sub } = supabase.auth.onAuthStateChange((event, s) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => {
       setSession(s ?? null)
-      if (event === 'SIGNED_OUT') {
-        localStorage.removeItem(LOGIN_AT_KEY)
-        clearTimer()
-      } else {
-        // SIGNED_IN starts a fresh window (loginAt was cleared on the prior sign-out);
-        // refresh / token-refresh events keep the existing window.
-        armExpiry(!!s)
-      }
     })
 
-    return () => {
-      sub.subscription.unsubscribe()
-      clearTimer()
-    }
+    return () => sub.subscription.unsubscribe()
   }, [])
 
-  const signOut = useCallback(() => {
-    localStorage.removeItem(LOGIN_AT_KEY)
+  // Unhook this device from new-order pushes first — a signed-out phone
+  // shouldn't keep buzzing for orders.
+  const signOut = useCallback(async () => {
+    await unregisterPush()
     return supabase.auth.signOut()
   }, [])
 

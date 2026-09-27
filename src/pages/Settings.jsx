@@ -90,7 +90,7 @@ export default function Settings() {
         </div>
       </Topbar>
 
-      <div className="max-w-2xl space-y-6 p-8">
+      <div className="max-w-2xl space-y-6 p-4 lg:p-8">
         {/* Business hours */}
         <div className="rounded-xl border border-line bg-white p-6">
           <div className="flex items-center gap-2">

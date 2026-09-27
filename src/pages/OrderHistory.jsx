@@ -20,9 +20,10 @@ import { patchRowFromEvent, useRowMirror } from '../lib/realtimeRows.js'
 import { useOutletScope, useOutletTag } from '../lib/outletScope.js'
 import OutletSwitcher from '../components/OutletSwitcher.jsx'
 import OutletTag from '../components/OutletTag.jsx'
-import { orderCode } from '../lib/format.js'
+import { orderCode, orderNote } from '../lib/format.js'
 import { boldLast4 } from '../components/OrderIdLabel.jsx'
 import OrderTimeline from '../components/OrderTimeline.jsx'
+import OrderNote from '../components/OrderNote.jsx'
 import DateRangeFilter from '../components/DateRangeFilter.jsx'
 import { inRange } from '../lib/dateRange.js'
 import { exportToCsv } from '../lib/csv.js'
@@ -145,7 +146,7 @@ export default function OrderHistory() {
       'Order ID',
       'Date',
       ...(showBranch ? ['Branch'] : []),
-      'Customer', 'Rider', 'Vehicle', 'Items', 'Total', 'Status',
+      'Customer', 'Rider', 'Vehicle', 'Items', 'Order Note', 'Total', 'Status',
     ]
     const rows = filteredOrders.map((o) => [
       orderCode(o),
@@ -155,6 +156,7 @@ export default function OrderHistory() {
       o.rider?.full_name || '',
       o.rider?.vehicle_registration_number || '',
       o.order_items?.map((it) => `${it.quantity}x ${it.products?.name || 'Item'}`).join('; ') || '',
+      orderNote(o),
       o.total ?? 0,
       o.status,
     ])
@@ -162,7 +164,7 @@ export default function OrderHistory() {
   }
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-canvas">
+    <div className="flex h-full flex-col overflow-hidden bg-canvas">
       {/* Topbar */}
       <Topbar>
         <div className="flex items-center gap-3">
@@ -184,11 +186,11 @@ export default function OrderHistory() {
       </Topbar>
 
       {/* Page Body */}
-      <div className="flex flex-1 overflow-hidden p-6 gap-6">
+      <div className="flex flex-1 overflow-hidden p-3 gap-6 lg:p-6">
         {/* Main List Column */}
         <div className="flex-1 flex flex-col rounded-xl border border-line bg-white shadow-sm overflow-hidden">
           {/* Filters Bar */}
-          <div className="p-5 border-b border-line flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="p-4 border-b border-line flex flex-col md:flex-row md:items-center justify-between gap-4 lg:p-5">
             <div className="flex items-center gap-2 overflow-x-auto pb-1 md:pb-0">
               <button
                 onClick={() => setStatusFilter('all')}
@@ -232,12 +234,12 @@ export default function OrderHistory() {
               </button>
             </div>
 
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               {/* Date range filter: Today / Yesterday / This Month / Custom */}
               <DateRangeFilter defaultPreset="today" onChange={(r, p) => { setRange(r); setPreset(p) }} />
 
               {/* Search */}
-              <div className="relative w-64">
+              <div className="relative w-full sm:w-64">
                 <Search className="absolute top-2.5 left-3 h-3.5 w-3.5 text-ink-soft" />
                 <input
                   type="text"
@@ -252,95 +254,98 @@ export default function OrderHistory() {
 
           {/* Table list */}
           <div className="flex-1 overflow-y-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="border-b border-line bg-canvas/30 text-[10px] font-bold uppercase tracking-wider text-ink-soft">
-                  <th className="px-6 py-3.5">Order ID</th>
-                  <th className="px-6 py-3.5">Date & Time</th>
-                  {showBranch && <th className="px-6 py-3.5">Branch</th>}
-                  <th className="px-6 py-3.5">Customer</th>
-                  <th className="px-6 py-3.5">Items Summary</th>
-                  <th className="px-6 py-3.5">Total Amount</th>
-                  <th className="px-6 py-3.5">Status</th>
-                  <th className="px-6 py-3.5">Rider</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-line-soft">
-                {loading ? (
-                  <tr>
-                    <td colSpan={showBranch ? 8 : 7} className="px-6 py-12 text-center text-xs text-ink-soft">
-                      Loading history log...
-                    </td>
+            {/* Scrolls sideways on a phone rather than squashing the columns. */}
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[720px] text-left border-collapse">
+                <thead>
+                  <tr className="border-b border-line bg-canvas/30 text-[10px] font-bold uppercase tracking-wider text-ink-soft">
+                    <th className="px-6 py-3.5">Order ID</th>
+                    <th className="px-6 py-3.5">Date & Time</th>
+                    {showBranch && <th className="px-6 py-3.5">Branch</th>}
+                    <th className="px-6 py-3.5">Customer</th>
+                    <th className="px-6 py-3.5">Items Summary</th>
+                    <th className="px-6 py-3.5">Total Amount</th>
+                    <th className="px-6 py-3.5">Status</th>
+                    <th className="px-6 py-3.5">Rider</th>
                   </tr>
-                ) : filteredOrders.length === 0 ? (
-                  <tr>
-                    <td colSpan={showBranch ? 8 : 7} className="px-6 py-16 text-center text-xs text-ink-soft">
-                      <History className="h-8 w-8 mx-auto text-line-2 mb-2" />
-                      <p className="font-semibold text-ink">No historical records found</p>
-                      <p className="mt-1">Adjust filters or check back later</p>
-                    </td>
-                  </tr>
-                ) : (
-                  filteredOrders.map((o) => {
-                    const shortId = orderCode(o)
-                    const timestamp = new Date(o.created_at).toLocaleString('en-IN', {
-                      day: 'numeric',
-                      month: 'short',
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })
-                    const itemsText = o.order_items?.map(it => `${it.quantity}x ${it.products?.name || 'Item'}`).join(', ') || '—'
-                    const s = HISTORICAL_STATUS[o.status] ?? HISTORICAL_STATUS.delivered
+                </thead>
+                <tbody className="divide-y divide-line-soft">
+                  {loading ? (
+                    <tr>
+                      <td colSpan={showBranch ? 8 : 7} className="px-6 py-12 text-center text-xs text-ink-soft">
+                        Loading history log...
+                      </td>
+                    </tr>
+                  ) : filteredOrders.length === 0 ? (
+                    <tr>
+                      <td colSpan={showBranch ? 8 : 7} className="px-6 py-16 text-center text-xs text-ink-soft">
+                        <History className="h-8 w-8 mx-auto text-line-2 mb-2" />
+                        <p className="font-semibold text-ink">No historical records found</p>
+                        <p className="mt-1">Adjust filters or check back later</p>
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredOrders.map((o) => {
+                      const shortId = orderCode(o)
+                      const timestamp = new Date(o.created_at).toLocaleString('en-IN', {
+                        day: 'numeric',
+                        month: 'short',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })
+                      const itemsText = o.order_items?.map(it => `${it.quantity}x ${it.products?.name || 'Item'}`).join(', ') || '—'
+                      const s = HISTORICAL_STATUS[o.status] ?? HISTORICAL_STATUS.delivered
 
-                    return (
-                      <tr
-                        key={o.id}
-                        onClick={() => setSelectedOrderId(o.id)}
-                        className={`cursor-pointer hover:bg-canvas/40 transition-colors ${
-                          selectedOrderId === o.id ? 'bg-line-soft/40 font-medium' : ''
-                        }`}
-                      >
-                        <td className="px-6 py-4">
-                          <span className="flex items-center gap-1.5 text-xs font-medium text-brand">
-                            <span className="flex h-5 w-5 items-center justify-center rounded bg-line-soft text-ink-soft">
-                              <Hash className="h-3 w-3" />
-                            </span>
-                            {boldLast4(shortId)}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4 text-xs text-ink-soft">{timestamp}</td>
-                        {showBranch && (
+                      return (
+                        <tr
+                          key={o.id}
+                          onClick={() => setSelectedOrderId(o.id)}
+                          className={`cursor-pointer hover:bg-canvas/40 transition-colors ${
+                            selectedOrderId === o.id ? 'bg-line-soft/40 font-medium' : ''
+                          }`}
+                        >
                           <td className="px-6 py-4">
-                            <OutletTag restaurantId={o.restaurant_id} />
+                            <span className="flex items-center gap-1.5 text-xs font-medium text-brand">
+                              <span className="flex h-5 w-5 items-center justify-center rounded bg-line-soft text-ink-soft">
+                                <Hash className="h-3 w-3" />
+                              </span>
+                              {boldLast4(shortId)}
+                            </span>
                           </td>
-                        )}
-                        <td className="px-6 py-4 text-xs font-semibold text-ink">
-                          {o.delivery_address?.name || 'Customer'}
-                        </td>
-                        <td className="px-6 py-4 text-xs text-ink-soft truncate max-w-[280px]" title={itemsText}>
-                          {itemsText}
-                        </td>
-                        <td className="px-6 py-4 text-xs font-bold text-ink">₹{o.total}</td>
-                        <td className="px-6 py-4">
-                          <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold ${s.bg} ${s.text}`}>
-                            <span className={`h-1.5 w-1.5 rounded-full ${s.dot}`} /> {s.label}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4 text-xs text-ink-soft">
-                          {o.rider?.full_name || <span className="text-line-2">Unassigned</span>}
-                        </td>
-                      </tr>
-                    )
-                  })
-                )}
-              </tbody>
-            </table>
+                          <td className="px-6 py-4 text-xs text-ink-soft">{timestamp}</td>
+                          {showBranch && (
+                            <td className="px-6 py-4">
+                              <OutletTag restaurantId={o.restaurant_id} />
+                            </td>
+                          )}
+                          <td className="px-6 py-4 text-xs font-semibold text-ink">
+                            {o.delivery_address?.name || 'Customer'}
+                          </td>
+                          <td className="px-6 py-4 text-xs text-ink-soft truncate max-w-[280px]" title={itemsText}>
+                            {itemsText}
+                          </td>
+                          <td className="px-6 py-4 text-xs font-bold text-ink">₹{o.total}</td>
+                          <td className="px-6 py-4">
+                            <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold ${s.bg} ${s.text}`}>
+                              <span className={`h-1.5 w-1.5 rounded-full ${s.dot}`} /> {s.label}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 text-xs text-ink-soft">
+                            {o.rider?.full_name || <span className="text-line-2">Unassigned</span>}
+                          </td>
+                        </tr>
+                      )
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
 
         {/* Selected Order Detail Drawer / Right Pane */}
         {selectedOrder && (
-          <div className="w-[380px] shrink-0 border border-line bg-white rounded-xl shadow-sm overflow-hidden flex flex-col animate-in slide-in-from-right duration-200">
+          <div className="fixed inset-0 z-40 flex flex-col overflow-hidden bg-white lg:static lg:z-auto lg:w-[380px] lg:shrink-0 lg:rounded-xl lg:border lg:border-line lg:shadow-sm animate-in slide-in-from-right duration-200">
             {/* Header */}
             <div className="p-4 border-b border-line flex justify-between items-center bg-canvas/30">
               <div>
@@ -378,6 +383,8 @@ export default function OrderHistory() {
 
               {/* Zomato-style order timeline */}
               <OrderTimeline order={selectedOrder} />
+
+              <OrderNote order={selectedOrder} />
 
               {/* Cancellation reason (shown to customer) */}
               {selectedOrder.status === 'cancelled' && selectedOrder.cancellation_reason && (

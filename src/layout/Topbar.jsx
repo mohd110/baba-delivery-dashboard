@@ -1,10 +1,11 @@
 import { Search, Bell, LayoutGrid } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 
-/* Header shell — pages compose their own left/right content */
+/* Header shell — pages compose their own left/right content. On a phone the
+ * two halves wrap onto separate rows instead of overflowing sideways. */
 export default function Topbar({ children }) {
   return (
-    <header className="sticky top-0 z-20 flex h-16 w-full shrink-0 items-center justify-between gap-4 border-b border-line bg-white px-8">
+    <header className="sticky top-0 z-20 flex min-h-16 w-full shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-line bg-white px-4 py-2 lg:h-16 lg:flex-nowrap lg:px-8 lg:py-0">
       {children}
     </header>
   )
@@ -54,13 +55,13 @@ export function TopIcons() {
 }
 
 export function Divider() {
-  return <div className="mx-1 h-6 w-px bg-line" />
+  return <div className="mx-1 hidden h-6 w-px bg-line sm:block" />
 }
 
 export function ProfileChip({ name = 'Wali Baba Foods', sub = 'Delivery Admin', img, initials, initialsBg = 'bg-brand' }) {
   const logoSrc = img || '/assets/wali-baba-logo.png'
   return (
-    <div className="flex items-center gap-3">
+    <div className="hidden items-center gap-3 sm:flex">
       <img
         src={logoSrc}
         onError={(e) => {

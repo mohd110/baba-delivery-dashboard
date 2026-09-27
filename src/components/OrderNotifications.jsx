@@ -5,6 +5,7 @@ import { supabase } from '../lib/supabase.js'
 import { orderCode } from '../lib/format.js'
 import { useOutletScope, useOutletTag } from '../lib/outletScope.js'
 import { boldLast4 } from './OrderIdLabel.jsx'
+import { closeNotificationsByTag, isMobileDevice, showDeviceNotification } from '../lib/device.js'
 
 let toastSeq = 0
 
@@ -113,9 +114,10 @@ const desktopNotes = new Map()
 
 function notifyNewOrderDesktop(toast, onOpen) {
   try {
-    if (!('Notification' in window) || Notification.permission !== 'granted') return
     const money = toast.total != null ? ` · ₹${toast.total.toLocaleString('en-IN')}` : ''
-    const n = new Notification('🔔 New order received', {
+    // Same tag as the server push (api/new-order-push.js), so a phone that
+    // gets both shows one notification, not two.
+    const n = showDeviceNotification('🔔 New order received', {
       body: `${toast.code}${money} · ${toast.name}
 Awaiting acceptance — click to open.`,
       tag: `new-order-${toast.orderId || toast.id}`,
@@ -124,20 +126,21 @@ Awaiting acceptance — click to open.`,
       // it — unless the bell was refused, in which case the chime is the only
       // sound there is.
       silent: !alarmBlocked,
+      url: toast.orderId ? `/orders?order=${toast.orderId}` : '/orders',
+      onClick: onOpen,
     })
-    n.onclick = () => {
-      try { window.focus() } catch { /* ignore */ }
-      onOpen?.()
-      n.close()
-    }
-    if (toast.orderId) desktopNotes.set(toast.orderId, n)
+    if (n && toast.orderId) desktopNotes.set(toast.orderId, n)
   } catch {
     /* notifications unavailable — the in-app toast and the bell still fire */
   }
 }
 
 function closeDesktopNote(orderId) {
-  const n = orderId && desktopNotes.get(orderId)
+  if (!orderId) return
+  // A push may have raised one while the app was closed — not in the map, but
+  // it carries the same tag.
+  closeNotificationsByTag(`new-order-${orderId}`)
+  const n = desktopNotes.get(orderId)
   if (!n) return
   try { n.close() } catch { /* already gone */ }
   desktopNotes.delete(orderId)
@@ -182,6 +185,9 @@ export default function OrderNotifications() {
    * is why `enableAlerts` below also exists as an explicit button. */
   useEffect(() => {
     if (notifyPerm !== 'default') return
+    // Phones get asked from the setup sheet (PhoneSetup) instead: mobile
+    // browsers ignore or quietly block a prompt that no tap asked for.
+    if (isMobileDevice()) return
     try {
       const r = Notification.requestPermission()
       if (r && typeof r.then === 'function') r.then(setNotifyPerm).catch(() => {})
@@ -306,7 +312,7 @@ export default function OrderNotifications() {
   }
 
   return (
-    <div className="pointer-events-none fixed right-6 top-6 z-50 flex w-80 flex-col gap-3">
+    <div className="pointer-events-none fixed inset-x-3 top-3 z-50 flex flex-col gap-3 sm:inset-x-auto sm:right-6 sm:top-6 sm:w-80">
       {showAlertPrompt && (
         <div className="pointer-events-auto rounded-xl border border-amber-200 bg-amber-50 p-3 shadow-[0_8px_24px_rgba(0,0,0,0.10)]">
           <p className="flex items-center gap-1.5 text-xs font-bold text-[#92400e]">
